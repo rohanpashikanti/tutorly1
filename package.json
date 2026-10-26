@@ -1,0 +1,40 @@
+{
+  "name": "tutorly",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "test": "vitest run --config vitest.config.ts",
+    "dev:worker": "wrangler dev --local --port 8787",
+    "dev:all": "wrangler dev --local --port 8787 & vite",
+    "db:migrate:local": "wrangler d1 migrations apply tutorly --local",
+    "db:migrate:test": "wrangler d1 migrations apply tutorly --env test --local --persist-to .wrangler/state/test",
+    "test:worker": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "better-auth": "^1.7.13",
+    "hono": "^4.13.14",
+    "lucide-react": "^1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "overrides": {
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.88.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.4",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.152.0"
+  }
+}

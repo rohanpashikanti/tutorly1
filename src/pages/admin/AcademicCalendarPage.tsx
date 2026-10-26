@@ -1,0 +1,1278 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Calendar as CalendarIcon,
+  Plus,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  Award,
+  Sun,
+  X,
+  Download,
+  Trash2,
+  Edit2,
+  List,
+  Clock
+} from 'lucide-react';
+import { useApp } from '../../context/AppContext';
+import { CalendarEvent } from '../../types';
+import { downloadCSV } from '../../utils/demoActions';
+import { api } from '../../api/client';
+import { getStoredCalendarEvents, saveStoredCalendarEvents } from '../../utils/storage';
+
+export const AcademicCalendarPage: React.FC = () => {
+  const { role, showToast, activeInstitutionId } = useApp();
+  const isAdmin = role === 'admin';
+  const [activeTab, setActiveTab] = useState<'Calendar' | 'Academic Years' | 'Terms/Periods' | 'Holidays'>('Calendar');
+  const [displayMode, setDisplayMode] = useState<'cards' | 'grid'>('cards');
+  const [categoryFilter, setCategoryFilter] = useState<string>('All');
+  
+  // Persistent Calendar Events state
+  const [events, setEvents] = useState<CalendarEvent[]>(() => getStoredCalendarEvents());
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [viewEventDetail, setViewEventDetail] = useState<CalendarEvent | null>(null);
+
+  const months = [
+    { name: 'September 2026', year: 2026, month: 8 },
+    { name: 'October 2026', year: 2026, month: 9 },
+    { name: 'November 2026', year: 2026, month: 10 },
+    { name: 'December 2026', year: 2026, month: 11 }
+  ];
+  const [currentMonthIdx, setCurrentMonthIdx] = useState(1); // October 2026
+
+  const [formState, setFormState] = useState({
+    title: '',
+    type: 'Tuition Test' as CalendarEvent['type'],
+    date: '2026-10-25',
+    endDate: '',
+    time: '10:00 AM',
+    applicableClass: 'Class 10',
+    description: '',
+  });
+
+  const refreshEvents = async () => {
+    try {
+      const res = await api.calendar.list(activeInstitutionId);
+      if (res && res.events && res.events.length > 0) {
+        setEvents(res.events);
+        saveStoredCalendarEvents(res.events);
+      }
+    } catch {
+      // Keep cached state
+    }
+  };
+
+  useEffect(() => {
+    refreshEvents();
+  }, [activeInstitutionId]);
+
+  // Sync to storage on state change
+  const updateEventsAndPersist = (newEvents: CalendarEvent[]) => {
+    setEvents(newEvents);
+    saveStoredCalendarEvents(newEvents);
+  };
+
+  const handleExportEventsCSV = () => {
+    const data = events.map((ev) => ({
+      Title: ev.title,
+      Type: ev.type,
+      StartDate: ev.date,
+      EndDate: ev.endDate || ev.date,
+      Time: ev.time || 'N/A',
+      ApplicableClass: ev.applicableClass || 'All Classes',
+      Description: ev.description || '',
+    }));
+    downloadCSV('Academic_Calendar_Events.csv', data);
+    showToast(`Exported ${data.length} calendar events to CSV`, 'success');
+  };
+
+  const handlePrevMonth = () => {
+    setCurrentMonthIdx((prev) => Math.max(0, prev - 1));
+  };
+
+  const handleNextMonth = () => {
+    setCurrentMonthIdx((prev) => Math.min(months.length - 1, prev + 1));
+  };
+
+  const openNewEventModal = (initialDate?: string) => {
+    setEditingEventId(null);
+    setFormError(null);
+    setFormState({
+      title: '',
+      type: 'Tuition Test',
+      date: initialDate || '2026-10-25',
+      endDate: '',
+      time: '10:00 AM',
+      applicableClass: 'Class 10',
+      description: '',
+    });
+    setShowAddModal(true);
+  };
+
+  const openEditEventModal = (ev: CalendarEvent) => {
+    setEditingEventId(ev.id);
+    setFormError(null);
+    setFormState({
+      title: ev.title,
+      type: ev.type,
+      date: ev.date,
+      endDate: ev.endDate || '',
+      time: ev.time || '',
+      applicableClass: ev.applicableClass || 'All Classes',
+      description: ev.description || '',
+    });
+    setShowAddModal(true);
+  };
+
+  const handleDeleteEvent = async (id: string, title: string) => {
+    try {
+      await api.calendar.delete(activeInstitutionId, id);
+      await refreshEvents();
+    } catch {
+      const updated = events.filter(e => e.id !== id);
+      updateEventsAndPersist(updated);
+    }
+    showToast(`Deleted event: "${title}"`, 'info');
+  };
+
+  const handleSaveEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    // Validation
+    if (!formState.title.trim()) {
+      setFormError('Event title is required.');
+      return;
+    }
+    if (!formState.date) {
+      setFormError('Start date is required.');
+      return;
+    }
+    if (formState.endDate && formState.endDate < formState.date) {
+      setFormError('End date cannot be earlier than start date.');
+      return;
+    }
+
+    try {
+      await api.calendar.create(activeInstitutionId, {
+        title: formState.title.trim(),
+        type: formState.type,
+        date: formState.date,
+        endDate: formState.endDate || undefined,
+        time: formState.time || undefined,
+        applicableClass: formState.applicableClass,
+        description: formState.description || undefined,
+      });
+      await refreshEvents();
+      setShowAddModal(false);
+      showToast(`Event "${formState.title}" scheduled and saved persistently!`, 'success');
+      return;
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to save event to database', 'error');
+      return;
+    }
+  };
+
+  const getEventBadgeColor = (type: CalendarEvent['type']) => {
+    switch (type) {
+      case 'School Exam': return { bg: '#EFF6FF', text: '#1D4ED8', border: '#BFDBFE' };
+      case 'Tuition Test': return { bg: '#EEF2FF', text: '#4F46E5', border: '#C7D2FE' };
+      case 'Holiday': return { bg: '#FFFBEB', text: '#B45309', border: '#FDE68A' };
+      case 'Fee Event': return { bg: '#ECFDF5', text: '#047857', border: '#A7F3D0' };
+      case 'Meeting': return { bg: '#FDF2F8', text: '#BE185D', border: '#FBCFE8' };
+    }
+  };
+
+  // Compute calendar grid days dynamically for the active month
+  const activeMonthConfig = months[currentMonthIdx];
+  const daysInMonth = new Date(activeMonthConfig.year, activeMonthConfig.month + 1, 0).getDate();
+  const firstDayOfWeek = new Date(activeMonthConfig.year, activeMonthConfig.month, 1).getDay(); // 0=Sun..6=Sat
+  const daysInPrevMonth = new Date(activeMonthConfig.year, activeMonthConfig.month, 0).getDate();
+
+  const calendarCells = [];
+  // Previous month trailing days
+  for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+    calendarCells.push({
+      day: daysInPrevMonth - i,
+      inMonth: false,
+      dateStr: ''
+    });
+  }
+  // Current month days
+  for (let d = 1; d <= daysInMonth; d++) {
+    const mm = String(activeMonthConfig.month + 1).padStart(2, '0');
+    const dd = String(d).padStart(2, '0');
+    const dateStr = `${activeMonthConfig.year}-${mm}-${dd}`;
+    const dayEvents = events.filter(e => {
+      if (e.date === dateStr) return true;
+      if (e.endDate && e.date <= dateStr && dateStr <= e.endDate) return true;
+      return false;
+    });
+    calendarCells.push({
+      day: d,
+      inMonth: true,
+      dateStr,
+      isToday: dateStr === '2026-10-25',
+      events: dayEvents
+    });
+  }
+  // Next month leading days to complete grid rows
+  const remaining = 35 - calendarCells.length > 0 ? 35 - calendarCells.length : (42 - calendarCells.length > 0 ? 42 - calendarCells.length : 0);
+  for (let d = 1; d <= remaining; d++) {
+    calendarCells.push({
+      day: d,
+      inMonth: false,
+      dateStr: ''
+    });
+  }
+
+  // Count metrics
+  const tuitionTestsCount = events.filter(e => e.type === 'Tuition Test').length;
+  const schoolExamsCount = events.filter(e => e.type === 'School Exam').length;
+  const holidaysCount = events.filter(e => e.type === 'Holiday').length;
+
+  // Compute active month events for chronological schedule view
+  const activeMonthEvents = events.filter((ev) => {
+    const parts = ev.date.split('-');
+    if (parts.length >= 2) {
+      const yr = parseInt(parts[0], 10);
+      const mo = parseInt(parts[1], 10) - 1;
+      if (yr !== activeMonthConfig.year || mo !== activeMonthConfig.month) {
+        return false;
+      }
+    }
+    if (categoryFilter !== 'All' && ev.type !== categoryFilter) {
+      return false;
+    }
+    return true;
+  }).sort((a, b) => a.date.localeCompare(b.date));
+
+  return (
+    <div className="page-wrapper">
+      {/* Header */}
+      <div className="page-header">
+        <div className="page-title-group">
+          <div className="breadcrumb-nav">
+            <span>{role === 'parent' ? 'Parent Portal' : role === 'teacher' ? 'Teacher Portal' : 'Academic'}</span>
+            <span>›</span>
+            <span>Academic Calendar</span>
+          </div>
+          <h1>Academic Calendar</h1>
+          <p>
+            {role === 'parent'
+              ? 'View upcoming center events, tests, exams, and holidays for your child.'
+              : role === 'teacher'
+              ? 'Institutional academic schedule and upcoming test calendar.'
+              : 'Manage academic years, terms, and schedule events with persistent storage and instant updates.'}
+          </p>
+        </div>
+        <div className="page-actions">
+          <button className="btn btn-secondary" onClick={handleExportEventsCSV}>
+            <Download size={15} />
+            <span>Export CSV</span>
+          </button>
+          {isAdmin ? (
+            <button className="btn btn-primary" onClick={() => openNewEventModal()}>
+              <Plus size={16} />
+              <span>Add Event</span>
+            </button>
+          ) : (
+            <span className="badge badge-purple" style={{ padding: '6px 12px', fontSize: '12px' }}>
+              Read-only View
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs (Admin Only) */}
+      {isAdmin && (
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          {(['Calendar', 'Academic Years', 'Terms/Periods', 'Holidays'] as const).map((tab) => (
+            <button
+              key={tab}
+              className={`btn ${activeTab === tab ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActiveTab(tab)}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 4 Stat Cards (Admin Only) */}
+      {isAdmin && (
+        <div className="stat-grid-4" style={{ marginBottom: '20px' }}>
+        <div className="stat-card">
+          <div className="stat-icon purple">
+            <CalendarIcon size={22} />
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">Total Events</div>
+            <div className="stat-value">{events.length}</div>
+            <div className="stat-footer">
+              <span className="stat-badge-change positive">Live</span>
+              <span className="stat-subtext">Active calendar</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon blue">
+            <Award size={22} />
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">Tuition Tests</div>
+            <div className="stat-value">{tuitionTestsCount}</div>
+            <div className="stat-footer">
+              <span className="stat-subtext">Scheduled tests</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon red">
+            <Layers size={22} />
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">School Exams</div>
+            <div className="stat-value">{schoolExamsCount}</div>
+            <div className="stat-footer">
+              <span className="stat-subtext">Class assessments</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon orange">
+            <Sun size={22} />
+          </div>
+          <div className="stat-content">
+            <div className="stat-label">Holidays & Breaks</div>
+            <div className="stat-value">{holidaysCount}</div>
+            <div className="stat-footer">
+              <span className="stat-subtext">Festival & breaks</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
+
+      {/* 1. Main Calendar View Tab */}
+      {activeTab === 'Calendar' && (
+        <div className={isAdmin ? 'grid-split' : ''}>
+          
+          {/* Main Calendar Card */}
+          <div className="card" style={{ padding: '0px', overflow: 'hidden' }}>
+            {/* Calendar Controls Toolbar */}
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid #E2E8F0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '12px',
+                backgroundColor: '#FFFFFF'
+              }}
+            >
+              {/* Month Navigation */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handlePrevMonth}
+                    aria-label="Previous Month"
+                    style={{ minWidth: '38px', minHeight: '38px', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleNextMonth}
+                    aria-label="Next Month"
+                    style={{ minWidth: '38px', minHeight: '38px', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0F172A', lineHeight: 1.2 }}>
+                    {activeMonthConfig.name}
+                  </h3>
+                  <div style={{ fontSize: '12px', color: '#64748B' }}>
+                    {activeMonthEvents.length} {activeMonthEvents.length === 1 ? 'event' : 'events'} scheduled
+                  </div>
+                </div>
+              </div>
+
+              {/* View Switcher & Category Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                {/* View Switcher */}
+                <div
+                  style={{
+                    display: 'flex',
+                    background: '#F1F5F9',
+                    borderRadius: '8px',
+                    padding: '3px',
+                    border: '1px solid #E2E8F0'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setDisplayMode('cards')}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '12.5px',
+                      fontWeight: 600,
+                      border: 'none',
+                      borderRadius: '6px',
+                      backgroundColor: displayMode === 'cards' ? '#FFFFFF' : 'transparent',
+                      color: displayMode === 'cards' ? '#4F46E5' : '#64748B',
+                      boxShadow: displayMode === 'cards' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px'
+                    }}
+                  >
+                    <List size={14} />
+                    <span>Schedule Cards</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDisplayMode('grid')}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '12.5px',
+                      fontWeight: 600,
+                      border: 'none',
+                      borderRadius: '6px',
+                      backgroundColor: displayMode === 'grid' ? '#FFFFFF' : 'transparent',
+                      color: displayMode === 'grid' ? '#4F46E5' : '#64748B',
+                      boxShadow: displayMode === 'grid' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px'
+                    }}
+                  >
+                    <CalendarIcon size={14} />
+                    <span>Month Grid</span>
+                  </button>
+                </div>
+
+                {/* Category Filter */}
+                <select
+                  className="select-field"
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  style={{ padding: '7px 12px', fontSize: '12.5px', minWidth: '135px' }}
+                  aria-label="Filter calendar events"
+                >
+                  <option value="All">All Categories</option>
+                  <option value="Tuition Test">Tuition Tests</option>
+                  <option value="School Exam">School Exams</option>
+                  <option value="Holiday">Holidays</option>
+                  <option value="Meeting">Meetings</option>
+                  <option value="Fee Event">Fee Events</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="card-body" style={{ padding: '20px' }}>
+              {/* Mode A: Chronological Schedule Cards (Ideal for Mobile & Compact Scanning) */}
+              {displayMode === 'cards' ? (
+                <div>
+                  {activeMonthEvents.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+                      <CalendarIcon size={32} color="#94A3B8" style={{ marginBottom: '8px' }} />
+                      <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>
+                        No events found in {activeMonthConfig.name}
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>
+                        {categoryFilter !== 'All'
+                          ? `No ${categoryFilter} events match the selected filter.`
+                          : 'No scheduled academic events for this month.'}
+                      </div>
+                      {categoryFilter !== 'All' && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setCategoryFilter('All')}
+                          style={{ marginTop: '12px' }}
+                        >
+                          Clear Filter
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {activeMonthEvents.map((ev) => {
+                        const badgeColor = getEventBadgeColor(ev.type);
+                        const parts = ev.date.split('-');
+                        const dayNum = parts[2] ? parseInt(parts[2], 10) : 1;
+                        const dateObj = new Date(activeMonthConfig.year, activeMonthConfig.month, dayNum);
+                        const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+                        const monthShort = activeMonthConfig.name.split(' ')[0].substring(0, 3).toUpperCase();
+
+                        return (
+                          <div
+                            key={ev.id}
+                            onClick={() => {
+                              if (isAdmin) {
+                                openEditEventModal(ev);
+                              } else {
+                                setViewEventDetail(ev);
+                              }
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'stretch',
+                              borderRadius: '10px',
+                              border: '1px solid #E2E8F0',
+                              backgroundColor: '#FFFFFF',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+                              overflow: 'hidden',
+                              cursor: 'pointer',
+                              transition: 'transform 0.1s ease, box-shadow 0.1s ease'
+                            }}
+                            className="calendar-schedule-card"
+                          >
+                            {/* Date Badge Column */}
+                            <div
+                              style={{
+                                width: '74px',
+                                flexShrink: 0,
+                                backgroundColor: '#F8FAFC',
+                                borderRight: '1px solid #E2E8F0',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '12px 6px'
+                              }}
+                            >
+                              <span style={{ fontSize: '11px', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>
+                                {monthShort}
+                              </span>
+                              <span style={{ fontSize: '22px', fontWeight: 900, color: '#0F172A', lineHeight: 1.1 }}>
+                                {dayNum}
+                              </span>
+                              <span style={{ fontSize: '11px', fontWeight: 600, color: '#94A3B8' }}>
+                                {dayName}
+                              </span>
+                            </div>
+
+                            {/* Details Column */}
+                            <div
+                              style={{
+                                padding: '14px 16px',
+                                flex: 1,
+                                minWidth: 0,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'center',
+                                gap: '6px'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <span
+                                  style={{
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    padding: '2px 8px',
+                                    borderRadius: '6px',
+                                    background: badgeColor.bg,
+                                    color: badgeColor.text,
+                                    border: `1px solid ${badgeColor.border}`
+                                  }}
+                                >
+                                  {ev.type}
+                                </span>
+                                {ev.applicableClass && (
+                                  <span className="badge badge-gray" style={{ fontSize: '11px', fontWeight: 600 }}>
+                                    {ev.applicableClass}
+                                  </span>
+                                )}
+                                {ev.time && (
+                                  <span style={{ fontSize: '11.5px', color: '#64748B', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                    <Clock size={12} />
+                                    <span>{ev.time}</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0F172A', lineHeight: 1.3 }}>
+                                {ev.title}
+                              </h4>
+
+                              {ev.description && (
+                                <p style={{ margin: 0, fontSize: '12.5px', color: '#475569', lineHeight: 1.4 }}>
+                                  {ev.description}
+                                </p>
+                              )}
+                            </div>
+
+                            {/* View / Edit Action Link */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                padding: '0 16px',
+                                color: '#4F46E5',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                flexShrink: 0
+                              }}
+                            >
+                              <span>{isAdmin ? 'Edit' : 'View'}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Mode B: Month Grid View (with overflow container for mobile) */
+                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                  <div style={{ minWidth: '580px' }}>
+                    {/* Day headers */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontWeight: 700, fontSize: '12px', color: '#64748B', marginBottom: '8px' }}>
+                      <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
+                    </div>
+
+                    {/* Month calendar cells */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px' }}>
+                      {calendarCells.map((cell, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            if (cell.inMonth && cell.dateStr && isAdmin) {
+                              openNewEventModal(cell.dateStr);
+                            }
+                          }}
+                          style={{
+                            minHeight: '80px',
+                            padding: '6px',
+                            background: cell.isToday ? '#F5F3FF' : cell.inMonth ? '#FFFFFF' : '#F8FAFC',
+                            borderRadius: '8px',
+                            border: cell.isToday ? '2px solid #6366F1' : '1px solid #E2E8F0',
+                            opacity: cell.inMonth ? 1 : 0.45,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            cursor: cell.inMonth ? (isAdmin ? 'pointer' : 'default') : 'default',
+                            transition: 'border-color 0.15s ease'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '12px', fontWeight: cell.isToday ? 800 : 600, color: cell.isToday ? '#6366F1' : '#334155' }}>
+                              {cell.day}
+                            </span>
+                            {cell.isToday && (
+                              <span style={{ fontSize: '9px', fontWeight: 800, color: '#6366F1', textTransform: 'uppercase' }}>Today</span>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                            {cell.events?.slice(0, 2).map((ev) => {
+                              const styleColor = getEventBadgeColor(ev.type);
+                              return (
+                                <div
+                                  key={ev.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isAdmin) {
+                                      openEditEventModal(ev);
+                                    } else {
+                                      setViewEventDetail(ev);
+                                    }
+                                  }}
+                                  title={isAdmin ? `${ev.title} (${ev.type}) - Click to edit` : `${ev.title} (${ev.type})`}
+                                  style={{
+                                    padding: '2px 4px',
+                                    borderRadius: '4px',
+                                    fontSize: '9.5px',
+                                    fontWeight: 700,
+                                    background: styleColor.bg,
+                                    color: styleColor.text,
+                                    border: `1px solid ${styleColor.border}`,
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  {ev.title}
+                                </div>
+                              );
+                            })}
+                            {cell.events && cell.events.length > 2 && (
+                              <span style={{ fontSize: '9px', color: '#64748B', fontWeight: 600 }}>
+                                +{cell.events.length - 2} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Category Legends */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginTop: '20px', fontSize: '12px', flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#1D4ED8' }} /> School Exam</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4F46E5' }} /> Tuition Test</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#B45309' }} /> Holiday</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#BE185D' }} /> Meeting</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#047857' }} /> Fee Event</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Panel: Academic Year & Upcoming Events */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* Academic Year Info (Admin Only) */}
+            {isAdmin && (
+              <div className="card">
+                <div className="card-header">
+                  <div className="card-title">Academic Year</div>
+                  <span className="badge badge-success">Active</span>
+                </div>
+                <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>2026 - 2027</div>
+                  <div style={{ fontSize: '12.5px', color: '#64748B' }}>1 Apr 2026 - 31 Mar 2027</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', padding: '10px', background: '#F8FAFC', borderRadius: '8px', fontSize: '12px' }}>
+                    <div>
+                      <div style={{ color: '#94A3B8' }}>Total Terms</div>
+                      <div style={{ fontWeight: 700, color: '#0F172A' }}>2 Terms</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#94A3B8' }}>Working Days</div>
+                      <div style={{ fontWeight: 700, color: '#0F172A' }}>220 Days</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Upcoming Events List */}
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Upcoming Schedule ({events.length})</div>
+                {isAdmin && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '11px', padding: '3px 8px' }}
+                    onClick={() => openNewEventModal()}
+                  >
+                    <Plus size={12} /> Add
+                  </button>
+                )}
+              </div>
+              <div className="card-body" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '420px', overflowY: 'auto' }}>
+                {events.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '20px', color: '#64748B', fontSize: '12.5px' }}>
+                    No events scheduled.
+                  </div>
+                ) : (
+                  [...events]
+                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .map((ev) => {
+                      const badgeStyle = getEventBadgeColor(ev.type);
+                      const parts = ev.date.split('-');
+                      const dayNumber = parts[2] || '1';
+                      return (
+                        <div
+                          key={ev.id}
+                          onClick={() => {
+                            if (!isAdmin) {
+                              setViewEventDetail(ev);
+                            }
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            background: '#F8FAFC',
+                            border: '1px solid #E2E8F0',
+                            gap: '10px',
+                            cursor: !isAdmin ? 'pointer' : 'default'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+                            <div style={{ textAlign: 'center', minWidth: '32px', flexShrink: 0 }}>
+                              <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A' }}>{dayNumber}</div>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748B' }}>OCT</div>
+                            </div>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                                <span
+                                  style={{
+                                    fontSize: '9.5px',
+                                    fontWeight: 700,
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
+                                    background: badgeStyle.bg,
+                                    color: badgeStyle.text,
+                                    border: `1px solid ${badgeStyle.border}`
+                                  }}
+                                >
+                                  {ev.type}
+                                </span>
+                                {ev.applicableClass && (
+                                  <span style={{ fontSize: '10.5px', color: '#64748B' }}>• {ev.applicableClass}</span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {ev.title}
+                              </div>
+                              {ev.endDate && ev.endDate !== ev.date && (
+                                <div style={{ fontSize: '11px', color: '#64748B' }}>To {ev.endDate}</div>
+                              )}
+                            </div>
+                          </div>
+
+                          {isAdmin ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                              <button
+                                className="btn btn-secondary btn-icon"
+                                style={{ width: '28px', height: '28px', padding: 0 }}
+                                onClick={() => openEditEventModal(ev)}
+                                title="Edit Event"
+                              >
+                                <Edit2 size={13} color="#475569" />
+                              </button>
+                              <button
+                                className="btn btn-secondary btn-icon"
+                                style={{ width: '28px', height: '28px', padding: 0 }}
+                                onClick={() => handleDeleteEvent(ev.id, ev.title)}
+                                title="Delete Event"
+                              >
+                                <Trash2 size={13} color="#EF4444" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 500, flexShrink: 0 }}>
+                              {ev.time || 'All Day'}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* 2. Academic Years Tab */}
+      {activeTab === 'Academic Years' && (
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Academic Years Configuration</h2>
+              <p style={{ fontSize: '13px', color: '#64748B' }}>Manage historical, active, and upcoming academic sessions.</p>
+            </div>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => downloadCSV('Academic_Years.csv', [
+                { Session: '2026 - 2027', Start: '01 Apr 2026', End: '31 Mar 2027', Terms: 2, WorkingDays: 220, Status: 'Active' },
+                { Session: '2025 - 2026', Start: '01 Apr 2025', End: '31 Mar 2026', Terms: 2, WorkingDays: 218, Status: 'Archived' },
+                { Session: '2027 - 2028', Start: '01 Apr 2027', End: '31 Mar 2028', Terms: 2, WorkingDays: 220, Status: 'Upcoming' },
+              ])}
+            >
+              <Download size={14} />
+              <span>Export Sessions (CSV)</span>
+            </button>
+          </div>
+
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Academic Session</th>
+                  <th>Start Date</th>
+                  <th>End Date</th>
+                  <th>Total Terms</th>
+                  <th>Working Days</th>
+                  <th>Enrolled Students</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ fontWeight: 800, color: '#0F172A' }}>Academic Year 2026 - 2027</td>
+                  <td>01 Apr 2026</td>
+                  <td>31 Mar 2027</td>
+                  <td>2 Terms</td>
+                  <td>220 Days</td>
+                  <td><strong>248 Students</strong></td>
+                  <td><span className="badge badge-success">Active Session</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700, color: '#475569' }}>Academic Year 2025 - 2026</td>
+                  <td>01 Apr 2025</td>
+                  <td>31 Mar 2026</td>
+                  <td>2 Terms</td>
+                  <td>218 Days</td>
+                  <td>212 Students</td>
+                  <td><span className="badge badge-neutral">Archived</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700, color: '#475569' }}>Academic Year 2027 - 2028</td>
+                  <td>01 Apr 2027</td>
+                  <td>31 Mar 2028</td>
+                  <td>2 Terms</td>
+                  <td>220 Days</td>
+                  <td>0 Enrolled</td>
+                  <td><span className="badge badge-purple">Upcoming</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Terms / Periods Tab */}
+      {activeTab === 'Terms/Periods' && (
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Terms & Semesters</h2>
+              <p style={{ fontSize: '13px', color: '#64748B' }}>Break down the academic year into evaluative teaching periods.</p>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={() => showToast('New Term configuration modal opened', 'info')}>
+              <Plus size={14} />
+              <span>Add New Term</span>
+            </button>
+          </div>
+
+          <div className="grid-split-balanced" style={{ gap: '20px' }}>
+            <div style={{ border: '1px solid #C7D2FE', background: '#F8FAFC', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontWeight: 800, color: '#4338CA', fontSize: '16px' }}>Term 1 (First Half)</span>
+                <span className="badge badge-success">Current Term</span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '14px' }}>01 Apr 2026 - 30 Sep 2026</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', fontSize: '12px' }}>
+                <div style={{ background: '#FFFFFF', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Working Days</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A' }}>112</div>
+                </div>
+                <div style={{ background: '#FFFFFF', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Tuition Tests</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A' }}>14</div>
+                </div>
+                <div style={{ background: '#FFFFFF', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Examinations</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A' }}>2</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ border: '1px solid #E2E8F0', background: '#FFFFFF', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontWeight: 800, color: '#0F172A', fontSize: '16px' }}>Term 2 (Final Half)</span>
+                <span className="badge badge-neutral">Upcoming</span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '14px' }}>01 Oct 2026 - 31 Mar 2027</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', fontSize: '12px' }}>
+                <div style={{ background: '#F8FAFC', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Working Days</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A' }}>108</div>
+                </div>
+                <div style={{ background: '#F8FAFC', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Tuition Tests</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A' }}>16</div>
+                </div>
+                <div style={{ background: '#F8FAFC', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ color: '#94A3B8' }}>Examinations</div>
+                  <div style={{ fontWeight: 800, color: '#0F172A' }}>2</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Holidays Tab */}
+      {activeTab === 'Holidays' && (
+        <div className="card" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Holiday Calendar & Breaks</h2>
+              <p style={{ fontSize: '13px', color: '#64748B' }}>Official vacation schedule, national holidays, and tuition center closures.</p>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={() => openNewEventModal()}>
+              <Plus size={14} />
+              <span>Add Holiday</span>
+            </button>
+          </div>
+
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Holiday Name</th>
+                  <th>Dates</th>
+                  <th>Day</th>
+                  <th>Duration</th>
+                  <th>Category</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Gandhi Jayanti</td>
+                  <td>02 Oct 2026</td>
+                  <td>Friday</td>
+                  <td>1 Day</td>
+                  <td><span className="badge badge-info">National Holiday</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Dussehra Vacation</td>
+                  <td>19 Oct 2026 - 24 Oct 2026</td>
+                  <td>Monday - Saturday</td>
+                  <td>6 Days</td>
+                  <td><span className="badge badge-warning">Vacation Break</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Diwali Festival</td>
+                  <td>08 Nov 2026 - 10 Nov 2026</td>
+                  <td>Sunday - Tuesday</td>
+                  <td>3 Days</td>
+                  <td><span className="badge badge-purple">Festival Break</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Republic Day</td>
+                  <td>26 Jan 2027</td>
+                  <td>Tuesday</td>
+                  <td>1 Day</td>
+                  <td><span className="badge badge-info">National Holiday</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Event Modal */}
+      {showAddModal && (
+        <div className="modal-backdrop" onClick={() => setShowAddModal(false)}>
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '520px', width: '90%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+          >
+            <div className="modal-header">
+              <h2 className="modal-title">{editingEventId ? 'Edit Academic Event' : 'Schedule Academic Event'}</h2>
+              <button onClick={() => setShowAddModal(false)} aria-label="Close modal">
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEvent} style={{ overflowY: 'auto', flex: 1 }}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
+                {formError && (
+                  <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', fontSize: '13px', fontWeight: 600 }}>
+                    {formError}
+                  </div>
+                )}
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                    Event Title *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Science Chapter Test"
+                    value={formState.title}
+                    onChange={(e) => setFormState({ ...formState, title: e.target.value })}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+
+                <div className="grid-2-col" style={{ gap: '14px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                      Event Type *
+                    </label>
+                    <select
+                      value={formState.type}
+                      onChange={(e) => setFormState({ ...formState, type: e.target.value as any })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    >
+                      <option value="Tuition Test">Tuition Test</option>
+                      <option value="School Exam">School Exam</option>
+                      <option value="Holiday">Holiday</option>
+                      <option value="Meeting">Meeting</option>
+                      <option value="Fee Event">Fee Event</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                      Applicable Class
+                    </label>
+                    <select
+                      value={formState.applicableClass}
+                      onChange={(e) => setFormState({ ...formState, applicableClass: e.target.value })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    >
+                      <option value="All Classes">All Classes</option>
+                      <option value="Class 10">Class 10</option>
+                      <option value="Class 9">Class 9</option>
+                      <option value="Class 8">Class 8</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid-2-col" style={{ gap: '14px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                      Start Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={formState.date}
+                      onChange={(e) => setFormState({ ...formState, date: e.target.value })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                      End Date (Optional)
+                    </label>
+                    <input
+                      type="date"
+                      value={formState.endDate}
+                      min={formState.date}
+                      onChange={(e) => setFormState({ ...formState, endDate: e.target.value })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                    Time (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 10:00 AM - 12:00 PM"
+                    value={formState.time}
+                    onChange={(e) => setFormState({ ...formState, time: e.target.value })}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                    Description / Notes
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="Provide details about syllabus, instructions, or agenda..."
+                    value={formState.description}
+                    onChange={(e) => setFormState({ ...formState, description: e.target.value })}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  {editingEventId ? 'Save Changes' : 'Schedule Event'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Read-Only Event Detail Modal for Parents / Teachers */}
+      {viewEventDetail && (
+        <div className="modal-backdrop" onClick={() => setViewEventDetail(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Event Details</h3>
+              <button className="btn-icon" onClick={() => setViewEventDetail(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '3px 8px',
+                    borderRadius: '4px',
+                    background: getEventBadgeColor(viewEventDetail.type).bg,
+                    color: getEventBadgeColor(viewEventDetail.type).text,
+                    border: `1px solid ${getEventBadgeColor(viewEventDetail.type).border}`
+                  }}
+                >
+                  {viewEventDetail.type}
+                </span>
+                <h2 style={{ margin: '8px 0 0 0', fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>
+                  {viewEventDetail.title}
+                </h2>
+              </div>
+
+              <div style={{ backgroundColor: '#F8FAFC', padding: '12px', borderRadius: '8px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#64748B' }}>Date:</span>
+                  <span style={{ fontWeight: 600, color: '#0F172A' }}>
+                    {viewEventDetail.date} {viewEventDetail.endDate && viewEventDetail.endDate !== viewEventDetail.date ? `to ${viewEventDetail.endDate}` : ''}
+                  </span>
+                </div>
+                {viewEventDetail.time && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#64748B' }}>Time:</span>
+                    <span style={{ fontWeight: 600, color: '#0F172A' }}>{viewEventDetail.time}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#64748B' }}>Applicable For:</span>
+                  <span style={{ fontWeight: 600, color: '#0F172A' }}>{viewEventDetail.applicableClass || 'All Classes'}</span>
+                </div>
+              </div>
+
+              {viewEventDetail.description && (
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', marginBottom: '4px' }}>Description</div>
+                  <div style={{ fontSize: '13px', color: '#334155', lineHeight: '1.5' }}>
+                    {viewEventDetail.description}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                <button className="btn btn-secondary" onClick={() => setViewEventDetail(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+};

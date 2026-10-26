@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tutorly-api",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_ENV": "production",
+    "APP_URL": "https://tutorly1-lyart.vercel.app"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tutorly",
+      "database_id": "13826a48-d381-4af5-9e1e-fa5882315fe9",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "env": {
+    "test": {
+      "name": "tutorly-api-test",
+      "vars": { "APP_ENV": "test", "APP_URL": "http://localhost:5173" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "tutorly",
+          "database_id": "00000000-0000-0000-0000-000000000002",
+          "migrations_dir": "migrations"
+        }
+      ]
+    },
+    "production": {
+      "name": "tutorly-api",
+      "vars": { "APP_ENV": "production", "APP_URL": "https://tutorly1-lyart.vercel.app" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "tutorly",
+          "database_id": "13826a48-d381-4af5-9e1e-fa5882315fe9",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
+}
