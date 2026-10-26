@@ -1016,6 +1016,8 @@ button {
   justify-content: center;
   padding: 20px;
   animation: fadeIn 0.2s ease;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal-card {
@@ -1024,11 +1026,23 @@ button {
   width: 100%;
   max-width: 620px;
   max-height: 90vh;
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-xl);
   overflow: hidden;
   animation: scaleUp 0.2s ease;
+  margin: auto;
+  position: relative;
+}
+
+.modal-card > form,
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .modal-header {
@@ -1037,6 +1051,7 @@ button {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
 
 .modal-title {
@@ -1048,6 +1063,9 @@ button {
 .modal-body {
   padding: 24px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
 }
 
 .modal-footer {
@@ -1058,6 +1076,7 @@ button {
   gap: 12px;
   border-top: 1px solid var(--border-subtle);
   background-color: var(--bg-surface-subtle);
+  flex-shrink: 0;
 }
 
 .slide-over-backdrop {
@@ -2153,6 +2172,37 @@ button {
     flex-direction: column;
     gap: 10px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+    align-items: center;
+    overflow-y: auto;
+  }
+
+  .modal-card {
+    max-height: calc(100dvh - 24px);
+    width: 100%;
+    margin: auto;
+    border-radius: 16px;
+  }
+
+  .modal-header {
+    padding: 14px 16px;
+  }
+
+  .modal-title {
+    font-size: 16px;
+  }
+
+  .modal-body {
+    padding: 16px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal-footer {
+    padding: 12px 16px;
   }
 }
 

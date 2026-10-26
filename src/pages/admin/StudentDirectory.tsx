@@ -757,8 +757,22 @@ export const StudentDirectory: React.FC = () => {
               <h2 className="modal-title">Add New Student</h2>
               <button disabled={isSubmitting} onClick={handleCloseAddModal}><X size={20} color="#64748B" /></button>
             </div>
-            <form onSubmit={handleAddStudentSubmit}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <form
+              onSubmit={handleAddStudentSubmit}
+              style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}
+            >
+              <div
+                className="modal-body"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                  overflowY: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                  flex: 1,
+                  minHeight: 0
+                }}
+              >
                 <div className="grid-2-col" style={{ gap: '14px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Full Name *</label>
@@ -916,7 +930,7 @@ export const StudentDirectory: React.FC = () => {
                 </div>
 
               </div>
-              <div className="modal-footer">
+              <div className="modal-footer" style={{ flexShrink: 0 }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -948,8 +962,22 @@ export const StudentDirectory: React.FC = () => {
                 <X size={20} color="#64748B" />
               </button>
             </div>
-            <form onSubmit={handleSaveEdit}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <form
+              onSubmit={handleSaveEdit}
+              style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}
+            >
+              <div
+                className="modal-body"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                  overflowY: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                  flex: 1,
+                  minHeight: 0
+                }}
+              >
                 <div className="grid-2-col" style={{ gap: '14px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Full Name *</label>
@@ -1036,7 +1064,7 @@ export const StudentDirectory: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <div className="modal-footer">
+              <div className="modal-footer" style={{ flexShrink: 0 }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
