@@ -6,6 +6,7 @@ export interface Env {
   APP_ENV: 'local' | 'test' | 'production';
   APP_URL?: string;
   BETTER_AUTH_SECRET: string;
+  BETTER_AUTH_API_KEY?: string;
 }
 
 export type AuthUser = { id: string; name: string; email: string; emailVerified: boolean };
@@ -50,7 +51,11 @@ export function isSameOriginRequest(c: Context<{ Bindings: Env }>): boolean {
   try {
     const originHost = new URL(origin).origin;
     const appHost = new URL(c.env.APP_URL).origin;
-    return originHost === appHost || originHost === 'https://tutorly1-lyart.vercel.app';
+    return (
+      originHost === appHost ||
+      originHost === 'https://tutorly1-lyart.vercel.app' ||
+      originHost === 'https://tutorly1-cqsm.vercel.app'
+    );
   } catch {
     return false;
   }

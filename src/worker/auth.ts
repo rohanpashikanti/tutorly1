@@ -1,10 +1,12 @@
 import { betterAuth, type Auth, type BetterAuthOptions } from 'better-auth';
+import { dash } from '@better-auth/infra';
 
 export interface AuthEnv {
   DB: D1Database;
   APP_ENV: 'local' | 'test' | 'production';
   APP_URL?: string;
   BETTER_AUTH_SECRET: string;
+  BETTER_AUTH_API_KEY?: string;
 }
 
 const authCache = new WeakMap<D1Database, Auth>();
@@ -17,7 +19,12 @@ export function getAuth(env: AuthEnv) {
   }
   if (!env.APP_URL) throw new Error('APP_URL must be configured for the Worker environment');
   const trustedOrigins = Array.from(
-    new Set([env.APP_URL, 'https://tutorly1-lyart.vercel.app'].filter(Boolean))
+    new Set([
+      env.APP_URL,
+      'https://tutorly1-cqsm.vercel.app',
+      'https://tutorly1-lyart.vercel.app',
+      'https://tutorly-api.innovateuxclub.workers.dev'
+    ].filter(Boolean))
   );
   const options: BetterAuthOptions = {
     appName: 'Tutorly',
@@ -28,6 +35,11 @@ export function getAuth(env: AuthEnv) {
     database: env.DB,
     emailAndPassword: { enabled: true },
     rateLimit: { enabled: true, storage: 'database' },
+    plugins: [
+      dash({
+        apiKey: env.BETTER_AUTH_API_KEY,
+      }),
+    ],
     advanced: {
       cookiePrefix: 'tutorly',
       useSecureCookies: env.APP_ENV === 'production',
