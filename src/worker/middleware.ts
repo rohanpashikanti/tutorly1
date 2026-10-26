@@ -165,3 +165,115 @@ export async function authenticateInstitution(
   }
   return { user: identity.user, membership, institutionId };
 }
+
+export async function getIdempotentResponse(
+  db: D1Database,
+  institutionId: string,
+  key: string | null | undefined
+): Promise<{ status: number; body: any } | null> {
+  if (!key) return null;
+  try {
+    const existing = await db
+      .prepare(
+        `SELECT status_code, response_body
+         FROM idempotency_keys
+         WHERE institution_id = ? AND idempotency_key = ? AND expires_at > ?`
+      )
+      .bind(institutionId, key, new Date().toISOString())
+      .first<{ status_code: number | null; response_body: string | null }>();
+
+    if (!existing || existing.status_code === null || !existing.response_body) return null;
+    return {
+      status: existing.status_code,
+      body: JSON.parse(existing.response_body),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function acquireOrGetIdempotentResponse(
+  db: D1Database,
+  institutionId: string,
+  key: string | null | undefined,
+  endpoint: string
+): Promise<{ status: number; body: any } | null> {
+  if (!key) return null;
+  try {
+    const existing = await getIdempotentResponse(db, institutionId, key);
+    if (existing) return existing;
+
+    const id = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const res = await db
+      .prepare(
+        `INSERT INTO idempotency_keys (id, institution_id, idempotency_key, endpoint, status_code, response_body, expires_at)
+         VALUES (?, ?, ?, ?, NULL, NULL, ?)
+         ON CONFLICT (institution_id, idempotency_key) DO NOTHING`
+      )
+      .bind(id, institutionId, key, endpoint, expiresAt)
+      .run();
+
+    // If no row was inserted, a concurrent request has already claimed this key
+    const wasExisting = !res.meta.changes || res.meta.changes === 0;
+    if (wasExisting) {
+      // Poll briefly for the primary request to finish and save its response
+      const maxAttempts = 15;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const completed = await getIdempotentResponse(db, institutionId, key);
+        if (completed) {
+          return completed;
+        }
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.error('acquireOrGetIdempotentResponse error:', err);
+    return null;
+  }
+}
+
+export async function saveIdempotentResponse(
+  db: D1Database,
+  institutionId: string,
+  key: string | null | undefined,
+  endpoint: string,
+  statusCode: number,
+  body: any
+): Promise<void> {
+  if (!key) return;
+  try {
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await db
+      .prepare(
+        `INSERT INTO idempotency_keys (id, institution_id, idempotency_key, endpoint, status_code, response_body, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(institution_id, idempotency_key) DO UPDATE SET
+           status_code = excluded.status_code,
+           response_body = excluded.response_body,
+           expires_at = excluded.expires_at`
+      )
+      .bind(crypto.randomUUID(), institutionId, key, endpoint, statusCode, JSON.stringify(body), expiresAt)
+      .run();
+  } catch (err) {
+    console.error('Failed to save idempotency key:', err);
+  }
+}
+
+export function extractIdempotencyKey(
+  c: Context<{ Bindings: Env }>,
+  body?: Record<string, unknown> | null
+): string | null {
+  const headerKey = c.req.header('idempotency-key') || c.req.header('x-idempotency-key');
+  if (headerKey && typeof headerKey === 'string' && headerKey.trim()) {
+    return headerKey.trim();
+  }
+  if (body && typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()) {
+    return body.idempotencyKey.trim();
+  }
+  return null;
+}
+

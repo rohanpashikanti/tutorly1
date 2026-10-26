@@ -46,6 +46,17 @@ export const StudentDirectory: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [addStudentIdempotencyKey, setAddStudentIdempotencyKey] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+  );
+
+  const handleOpenAddModal = () => {
+    setAddStudentIdempotencyKey(
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+    );
+    setShowAddModal(true);
+  };
 
   const loadStudents = React.useCallback(async () => {
     if (!activeInstitutionId) return;
@@ -133,7 +144,8 @@ export const StudentDirectory: React.FC = () => {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeDrawerStudent) return;
+    if (!activeDrawerStudent || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await api.students.update(activeInstitutionId, activeDrawerStudent.id, {
         name: editFormData.name,
@@ -145,6 +157,8 @@ export const StudentDirectory: React.FC = () => {
       await loadStudents();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to update student profile', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -178,13 +192,23 @@ export const StudentDirectory: React.FC = () => {
 
   const handleAddStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
-      await api.students.create(activeInstitutionId, formData);
+      await api.students.create(activeInstitutionId, {
+        ...formData,
+        idempotencyKey: addStudentIdempotencyKey,
+      });
       setShowAddModal(false);
       showToast(`Student ${formData.name} enrolled and tuition fee assigned!`, 'success');
+      setAddStudentIdempotencyKey(
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+      );
       await loadStudents();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to enroll student', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -206,7 +230,7 @@ export const StudentDirectory: React.FC = () => {
             <Download size={16} />
             <span>Export CSV</span>
           </button>
-          <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+          <button className="btn btn-primary" onClick={handleOpenAddModal}>
             <Plus size={16} />
             <span>Add Student</span>
           </button>
@@ -768,8 +792,21 @@ export const StudentDirectory: React.FC = () => {
 
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Enroll Student</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowAddModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Enrolling...' : 'Enroll Student'}
+                </button>
               </div>
             </form>
           </div>
@@ -778,11 +815,13 @@ export const StudentDirectory: React.FC = () => {
 
       {/* Edit Student Modal */}
       {showEditModal && activeDrawerStudent && (
-        <div className="modal-backdrop" onClick={() => setShowEditModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowEditModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Edit Student Profile — {activeDrawerStudent.name}</h2>
-              <button onClick={() => setShowEditModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowEditModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleSaveEdit}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -793,6 +832,7 @@ export const StudentDirectory: React.FC = () => {
                       type="text"
                       required
                       value={editFormData.name}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -801,6 +841,7 @@ export const StudentDirectory: React.FC = () => {
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Class</label>
                     <select
                       value={editFormData.class}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditFormData({ ...editFormData, class: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -820,6 +861,7 @@ export const StudentDirectory: React.FC = () => {
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Batch</label>
                     <select
                       value={editFormData.batch}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditFormData({ ...editFormData, batch: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -838,6 +880,7 @@ export const StudentDirectory: React.FC = () => {
                       type="text"
                       required
                       value={editFormData.fatherName}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditFormData({ ...editFormData, fatherName: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -851,6 +894,7 @@ export const StudentDirectory: React.FC = () => {
                       type="tel"
                       required
                       value={editFormData.phone}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -860,6 +904,7 @@ export const StudentDirectory: React.FC = () => {
                     <input
                       type="email"
                       value={editFormData.email}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -867,8 +912,21 @@ export const StudentDirectory: React.FC = () => {
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Changes</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowEditModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
               </div>
             </form>
           </div>

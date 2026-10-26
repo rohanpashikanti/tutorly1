@@ -1,5 +1,12 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import {
+  Env,
+  authenticateInstitution,
+  readJson,
+  extractIdempotencyKey,
+  getIdempotentResponse,
+  saveIdempotentResponse,
+} from '../middleware';
 
 export const feesRouter = new Hono<{ Bindings: Env }>();
 
@@ -162,7 +169,14 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
-  // 1. Verify student exists
+  // 1. Idempotency Check
+  const idempotencyKey = extractIdempotencyKey(c, body);
+  const cachedResponse = await getIdempotentResponse(DB, instId, idempotencyKey);
+  if (cachedResponse) {
+    return c.json(cachedResponse.body, cachedResponse.status as any);
+  }
+
+  // 2. Verify student exists
   const student = await DB.prepare(
     `SELECT first_name, last_name FROM students WHERE id = ? AND institution_id = ? AND deleted_at IS NULL`
   )
@@ -172,6 +186,28 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
   if (!student) return c.json({ error: 'Student not found' }, 404);
 
   const totalPaise = Math.round(amountRupees * 100);
+
+  // 3. Rapid Double-Submission / Burst Payment Protection (within 5 seconds)
+  const recentDuplicate = await DB.prepare(
+    `SELECT id, receipt_no
+     FROM payments
+     WHERE institution_id = ? AND student_id = ? AND amount_paise = ?
+       AND received_at >= datetime('now', '-5 seconds')
+     LIMIT 1`
+  )
+    .bind(instId, studentId, totalPaise)
+    .first<{ id: string; receipt_no: string }>();
+
+  if (recentDuplicate) {
+    return c.json(
+      {
+        error: `A payment of ₹${amountRupees} for this student was just recorded (${recentDuplicate.receipt_no}). Duplicate payments are blocked.`,
+        existingPaymentId: recentDuplicate.id,
+        receiptNo: recentDuplicate.receipt_no,
+      },
+      409
+    );
+  }
 
   // 2. Find open charges for this student
   const openCharges = await DB.prepare(
@@ -245,17 +281,20 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
   }
 
   const studentName = `${student.first_name} ${student.last_name || ''}`.trim();
-  return c.json(
-    {
-      success: true,
-      message: 'Payment recorded and allocated successfully',
-      paymentId,
-      receiptNo,
-      amount: amountRupees,
-      studentName,
-    },
-    201
-  );
+  const responseBody = {
+    success: true,
+    message: 'Payment recorded and allocated successfully',
+    paymentId,
+    receiptNo,
+    amount: amountRupees,
+    studentName,
+  };
+
+  if (idempotencyKey) {
+    await saveIdempotentResponse(DB, instId, idempotencyKey, '/fees/payments', 201, responseBody);
+  }
+
+  return c.json(responseBody, 201);
 });
 
 feesRouter.get('/:institutionId/fees/payments', async (c) => {

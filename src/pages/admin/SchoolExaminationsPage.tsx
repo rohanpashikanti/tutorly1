@@ -63,6 +63,7 @@ export const SchoolExaminationsPage: React.FC = () => {
 
   // Modal for new exam creation
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [newExamData, setNewExamData] = useState({
     name: '',
     type: 'Term Exam' as Exam['type'],
@@ -234,11 +235,12 @@ export const SchoolExaminationsPage: React.FC = () => {
 
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newExamData.name.trim()) {
-      showToast('Exam name is required', 'error');
+    if (!newExamData.name.trim() || isSubmitting) {
+      if (!newExamData.name.trim()) showToast('Exam name is required', 'error');
       return;
     }
 
+    setIsSubmitting(true);
     try {
       const res = await api.assessments.create(activeInstitutionId, {
         name: newExamData.name.trim(),
@@ -255,6 +257,8 @@ export const SchoolExaminationsPage: React.FC = () => {
       showToast(`School Examination "${newExamData.name}" created!`, 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to create examination', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -988,11 +992,13 @@ export const SchoolExaminationsPage: React.FC = () => {
 
       {/* Schedule Exam Modal */}
       {showCreateModal && (
-        <div className="modal-backdrop" onClick={() => setShowCreateModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowCreateModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px', width: '90%' }}>
             <div className="modal-header">
               <h2 className="modal-title">Schedule School Examination</h2>
-              <button onClick={() => setShowCreateModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowCreateModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleCreateExam}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
@@ -1005,6 +1011,7 @@ export const SchoolExaminationsPage: React.FC = () => {
                     required
                     placeholder="e.g. Unit Test 2 / Half Yearly Examination"
                     value={newExamData.name}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewExamData({ ...newExamData, name: e.target.value })}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
@@ -1017,6 +1024,7 @@ export const SchoolExaminationsPage: React.FC = () => {
                     </label>
                     <select
                       value={newExamData.type}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewExamData({ ...newExamData, type: e.target.value as any })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -1033,6 +1041,7 @@ export const SchoolExaminationsPage: React.FC = () => {
                     </label>
                     <select
                       value={newExamData.classes}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewExamData({ ...newExamData, classes: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -1056,6 +1065,7 @@ export const SchoolExaminationsPage: React.FC = () => {
                       type="date"
                       required
                       value={newExamData.startDate}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewExamData({ ...newExamData, startDate: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -1070,6 +1080,7 @@ export const SchoolExaminationsPage: React.FC = () => {
                       required
                       value={newExamData.endDate}
                       min={newExamData.startDate}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewExamData({ ...newExamData, endDate: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -1078,11 +1089,20 @@ export const SchoolExaminationsPage: React.FC = () => {
               </div>
 
               <div className="modal-footer" style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowCreateModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  Schedule Exam
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Scheduling...' : 'Schedule Exam'}
                 </button>
               </div>
             </form>

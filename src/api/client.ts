@@ -23,6 +23,16 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+export function getJsonHeaders(data?: any): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const key = data?.idempotencyKey || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : undefined);
+  if (key) {
+    headers['idempotency-key'] = String(key);
+  }
+  return headers;
+}
+
+
 export const api = {
   // Session & Tenants
   session: {
@@ -70,35 +80,35 @@ export const api = {
         academicYears: any[];
       }>(res);
     },
-    async createClass(institutionId: string, data: { name: string; code?: string }) {
+    async createClass(institutionId: string, data: { name: string; code?: string; idempotencyKey?: string }) {
       const res = await fetch(`/api/institutions/${institutionId}/classes`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; id: string; name: string }>(res);
     },
     async createBatch(
       institutionId: string,
-      data: { className?: string; classId?: string; name: string; timing?: string; days?: string[] }
+      data: { className?: string; classId?: string; name: string; timing?: string; days?: string[]; idempotencyKey?: string }
     ) {
       const res = await fetch(`/api/institutions/${institutionId}/batches`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; id: string; name: string }>(res);
     },
     async createSubject(
       institutionId: string,
-      data: { name: string; code?: string; isCore?: boolean; color?: string }
+      data: { name: string; code?: string; isCore?: boolean; color?: string; idempotencyKey?: string }
     ) {
       const res = await fetch(`/api/institutions/${institutionId}/subjects`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; id: string; name: string }>(res);
@@ -107,11 +117,11 @@ export const api = {
       const res = await fetch(`/api/institutions/${institutionId}/academic-years`, { credentials: 'same-origin' });
       return handleResponse<{ academicYears: AcademicYear[] }>(res);
     },
-    async createAcademicYear(institutionId: string, data: { name: string; startsOn: string; endsOn: string; status?: string }) {
+    async createAcademicYear(institutionId: string, data: { name: string; startsOn: string; endsOn: string; status?: string; idempotencyKey?: string }) {
       const res = await fetch(`/api/institutions/${institutionId}/academic-years`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; academicYear: AcademicYear }>(res);
@@ -158,7 +168,7 @@ export const api = {
       const res = await fetch(`/api/institutions/${institutionId}/teachers`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; teacherId: string }>(res);
@@ -200,7 +210,7 @@ export const api = {
       const res = await fetch(`/api/institutions/${institutionId}/students`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; studentId: string; admissionNo: string }>(res);
@@ -244,12 +254,12 @@ export const api = {
     },
     async submit(
       institutionId: string,
-      data: { date: string; class: string; batch: string; records: any[] }
+      data: { date: string; class: string; batch: string; records: any[]; idempotencyKey?: string }
     ) {
       const res = await fetch(`/api/institutions/${institutionId}/attendance/submit`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; sessionId: string }>(res);
@@ -280,7 +290,7 @@ export const api = {
       const res = await fetch(`/api/institutions/${institutionId}/assessments`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; assessmentId: string }>(res);
@@ -321,12 +331,12 @@ export const api = {
     },
     async recordPayment(
       institutionId: string,
-      data: { studentId: string; amount: number; method: string; notes?: string }
+      data: { studentId: string; amount: number; method: string; notes?: string; idempotencyKey?: string }
     ) {
       const res = await fetch(`/api/institutions/${institutionId}/fees/payments`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
       return handleResponse<{

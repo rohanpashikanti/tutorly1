@@ -32,6 +32,17 @@ export const TeacherManagement: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [addTeacherIdempotencyKey, setAddTeacherIdempotencyKey] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+  );
+
+  const handleOpenAddModal = () => {
+    setAddTeacherIdempotencyKey(
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+    );
+    setShowAddModal(true);
+  };
 
   const loadTeachers = React.useCallback(async () => {
     if (!activeInstitutionId) return;
@@ -122,19 +133,24 @@ export const TeacherManagement: React.FC = () => {
 
   const handleEditTeacherSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeDrawerTeacher) return;
+    if (!activeDrawerTeacher || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await api.teachers.update(activeInstitutionId, activeDrawerTeacher.id, {
         name: editTeacherData.name,
         designation: editTeacherData.designation,
         phone: editTeacherData.phone,
         status: editTeacherData.status,
+        subjects: editTeacherData.subjects,
+        classes: editTeacherData.classes,
       });
       setShowEditModal(false);
       showToast(`Updated teacher details for ${editTeacherData.name}`, 'success');
       await loadTeachers();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to update teacher', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -159,8 +175,13 @@ export const TeacherManagement: React.FC = () => {
 
   const handleAddTeacherSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
-      await api.teachers.create(activeInstitutionId, newTeacherData);
+      await api.teachers.create(activeInstitutionId, {
+        ...newTeacherData,
+        idempotencyKey: addTeacherIdempotencyKey,
+      });
       setShowAddModal(false);
       showToast(`Teacher ${newTeacherData.name} onboarded successfully!`, 'success');
       setNewTeacherData({
@@ -172,9 +193,14 @@ export const TeacherManagement: React.FC = () => {
         subjects: 'Mathematics, Science',
         classes: 'Class 10 (A), Class 9 (A)',
       });
+      setAddTeacherIdempotencyKey(
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+      );
       await loadTeachers();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to add teacher', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -192,7 +218,7 @@ export const TeacherManagement: React.FC = () => {
           <p>Manage your teachers, their subjects, classes, and workloads.</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+          <button className="btn btn-primary" onClick={handleOpenAddModal}>
             <Plus size={16} />
             <span>Add Teacher</span>
           </button>
@@ -495,11 +521,13 @@ export const TeacherManagement: React.FC = () => {
 
       {/* Add Teacher Modal */}
       {showAddModal && (
-        <div className="modal-backdrop" onClick={() => setShowAddModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowAddModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Add New Teacher</h2>
-              <button onClick={() => setShowAddModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowAddModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleAddTeacherSubmit}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -511,6 +539,7 @@ export const TeacherManagement: React.FC = () => {
                       required
                       placeholder="e.g. S. Ramakrishna"
                       value={newTeacherData.name}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTeacherData({ ...newTeacherData, name: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -520,6 +549,7 @@ export const TeacherManagement: React.FC = () => {
                     <input
                       type="text"
                       value={newTeacherData.designation}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTeacherData({ ...newTeacherData, designation: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -534,6 +564,7 @@ export const TeacherManagement: React.FC = () => {
                       required
                       placeholder="teacher@example.com"
                       value={newTeacherData.email}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTeacherData({ ...newTeacherData, email: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -545,6 +576,7 @@ export const TeacherManagement: React.FC = () => {
                       required
                       placeholder="98765 00000"
                       value={newTeacherData.phone}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTeacherData({ ...newTeacherData, phone: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -555,15 +587,42 @@ export const TeacherManagement: React.FC = () => {
                   <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Subjects (comma separated)</label>
                   <input
                     type="text"
+                    placeholder="e.g. Mathematics, Science"
                     value={newTeacherData.subjects}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewTeacherData({ ...newTeacherData, subjects: e.target.value })}
+                    style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Assigned Classes (comma separated)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Class 10 (A), Class 9 (A)"
+                    value={newTeacherData.classes}
+                    disabled={isSubmitting}
+                    onChange={(e) => setNewTeacherData({ ...newTeacherData, classes: e.target.value })}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Onboard Teacher</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowAddModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Onboarding...' : 'Onboard Teacher'}
+                </button>
               </div>
             </form>
           </div>
@@ -572,11 +631,13 @@ export const TeacherManagement: React.FC = () => {
 
       {/* Edit Teacher Modal */}
       {showEditModal && activeDrawerTeacher && (
-        <div className="modal-backdrop" onClick={() => setShowEditModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowEditModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Edit Teacher — {activeDrawerTeacher.name}</h2>
-              <button onClick={() => setShowEditModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowEditModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleEditTeacherSubmit}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -587,6 +648,7 @@ export const TeacherManagement: React.FC = () => {
                       type="text"
                       required
                       value={editTeacherData.name}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditTeacherData({ ...editTeacherData, name: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -596,6 +658,7 @@ export const TeacherManagement: React.FC = () => {
                     <input
                       type="text"
                       value={editTeacherData.designation}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditTeacherData({ ...editTeacherData, designation: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -609,6 +672,7 @@ export const TeacherManagement: React.FC = () => {
                       type="email"
                       required
                       value={editTeacherData.email}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditTeacherData({ ...editTeacherData, email: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -619,6 +683,7 @@ export const TeacherManagement: React.FC = () => {
                       type="tel"
                       required
                       value={editTeacherData.phone}
+                      disabled={isSubmitting}
                       onChange={(e) => setEditTeacherData({ ...editTeacherData, phone: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -630,6 +695,7 @@ export const TeacherManagement: React.FC = () => {
                   <input
                     type="text"
                     value={editTeacherData.subjects}
+                    disabled={isSubmitting}
                     onChange={(e) => setEditTeacherData({ ...editTeacherData, subjects: e.target.value })}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
@@ -640,14 +706,28 @@ export const TeacherManagement: React.FC = () => {
                   <input
                     type="text"
                     value={editTeacherData.classes}
+                    disabled={isSubmitting}
                     onChange={(e) => setEditTeacherData({ ...editTeacherData, classes: e.target.value })}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Changes</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowEditModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
               </div>
             </form>
           </div>

@@ -1,5 +1,12 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import {
+  Env,
+  authenticateInstitution,
+  readJson,
+  extractIdempotencyKey,
+  getIdempotentResponse,
+  saveIdempotentResponse,
+} from '../middleware';
 
 export const assessmentsRouter = new Hono<{ Bindings: Env }>();
 
@@ -122,6 +129,33 @@ assessmentsRouter.post('/:institutionId/assessments', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
+  // 1. Idempotency Check
+  const idempotencyKey = extractIdempotencyKey(c, body);
+  const cachedResponse = await getIdempotentResponse(DB, instId, idempotencyKey);
+  if (cachedResponse) {
+    return c.json(cachedResponse.body, cachedResponse.status as any);
+  }
+
+  // 2. Burst Duplicate Check (within 10 seconds)
+  const burstCheck = await DB.prepare(
+    `SELECT id, name FROM assessments
+     WHERE institution_id = ? AND LOWER(name) = LOWER(?) AND assessment_type = ?
+       AND created_at >= datetime('now', '-10 seconds')
+     LIMIT 1`
+  )
+    .bind(instId, name, typeParam)
+    .first<{ id: string; name: string }>();
+
+  if (burstCheck) {
+    return c.json(
+      {
+        error: `An assessment '${burstCheck.name}' was just created. Rapid duplicate submissions are blocked.`,
+        existingAssessmentId: burstCheck.id,
+      },
+      409
+    );
+  }
+
   // Resolve academic year, class, batch, subject
   let year = await DB.prepare(`SELECT id FROM academic_years WHERE institution_id = ? AND status = 'active'`)
     .bind(instId).first<{ id: string }>();
@@ -191,7 +225,12 @@ assessmentsRouter.post('/:institutionId/assessments', async (c) => {
     return c.json({ error: 'Failed to create assessment' }, 500);
   }
 
-  return c.json({ success: true, assessmentId, name }, 201);
+  const responseBody = { success: true, assessmentId, name };
+  if (idempotencyKey) {
+    await saveIdempotentResponse(DB, instId, idempotencyKey, '/assessments', 201, responseBody);
+  }
+
+  return c.json(responseBody, 201);
 });
 
 assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (c) => {

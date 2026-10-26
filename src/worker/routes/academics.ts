@@ -1,5 +1,12 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import {
+  Env,
+  authenticateInstitution,
+  readJson,
+  extractIdempotencyKey,
+  getIdempotentResponse,
+  saveIdempotentResponse,
+} from '../middleware';
 
 export const academicsRouter = new Hono<{ Bindings: Env }>();
 
@@ -421,6 +428,10 @@ academicsRouter.post('/:institutionId/classes', async (c) => {
     return c.json({ error: 'Class name must be between 1 and 100 characters' }, 400);
   }
 
+  const idempotencyKey = extractIdempotencyKey(c, body);
+  const cached = await getIdempotentResponse(c.env.DB, auth.institutionId, idempotencyKey);
+  if (cached) return c.json(cached.body, cached.status as any);
+
   const id = `cls-${crypto.randomUUID().slice(0, 8)}`;
   try {
     await c.env.DB.prepare(
@@ -434,7 +445,12 @@ academicsRouter.post('/:institutionId/classes', async (c) => {
     return c.json({ error: 'Failed to create class. Name may already exist.' }, 409);
   }
 
-  return c.json({ success: true, id, name }, 201);
+  const responseBody = { success: true, id, name };
+  if (idempotencyKey) {
+    await saveIdempotentResponse(c.env.DB, auth.institutionId, idempotencyKey, '/classes', 201, responseBody);
+  }
+
+  return c.json(responseBody, 201);
 });
 
 academicsRouter.post('/:institutionId/batches', async (c) => {
@@ -483,7 +499,13 @@ academicsRouter.post('/:institutionId/batches', async (c) => {
     return c.json({ error: 'Failed to create batch. Name may already exist for this class.' }, 409);
   }
 
-  return c.json({ success: true, id, name }, 201);
+  const responseBody = { success: true, id, name };
+  const idempotencyKey = extractIdempotencyKey(c, body);
+  if (idempotencyKey) {
+    await saveIdempotentResponse(c.env.DB, auth.institutionId, idempotencyKey, '/batches', 201, responseBody);
+  }
+
+  return c.json(responseBody, 201);
 });
 
 academicsRouter.post('/:institutionId/subjects', async (c) => {

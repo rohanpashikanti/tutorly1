@@ -49,6 +49,7 @@ export const AttendanceRegisterPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [attemptedSaveWithIncomplete, setAttemptedSaveWithIncomplete] = useState<boolean>(false);
 
   useEffect(() => {
@@ -160,6 +161,8 @@ export const AttendanceRegisterPage: React.FC = () => {
 
   // Save attendance
   const handleSaveAttendance = async () => {
+    if (isSaving) return;
+
     // Validate that no students remain unmarked
     if (unmarkedCount > 0) {
       setAttemptedSaveWithIncomplete(true);
@@ -173,6 +176,7 @@ export const AttendanceRegisterPage: React.FC = () => {
       'L': 'Late'
     };
 
+    setIsSaving(true);
     try {
       await api.attendance.submit(activeInstitutionId, {
         date: selectedDate,
@@ -191,6 +195,8 @@ export const AttendanceRegisterPage: React.FC = () => {
       await loadAttendance();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to save attendance', 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -236,11 +242,12 @@ export const AttendanceRegisterPage: React.FC = () => {
 
           <button
             className={`btn ${isSaved ? 'btn-secondary' : 'btn-primary'}`}
+            disabled={isSaving}
             onClick={handleSaveAttendance}
             style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '140px', justifyContent: 'center' }}
           >
             {isSaved ? <Check size={16} color="#10B981" /> : <Save size={16} />}
-            <span>{isSaved ? 'Saved' : 'Save Attendance'}</span>
+            <span>{isSaving ? 'Saving...' : (isSaved ? 'Saved' : 'Save Attendance')}</span>
           </button>
         </div>
       </div>
@@ -651,11 +658,12 @@ export const AttendanceRegisterPage: React.FC = () => {
           </div>
           <button
             className="btn btn-primary"
+            disabled={isSaving}
             style={{ padding: '9px 18px', fontSize: '13.5px', fontWeight: 700 }}
             onClick={handleSaveAttendance}
           >
             <Save size={15} />
-            <span>Save</span>
+            <span>{isSaving ? 'Saving...' : 'Save'}</span>
           </button>
         </div>
       </div>

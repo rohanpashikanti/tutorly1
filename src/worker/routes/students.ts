@@ -1,5 +1,12 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import {
+  Env,
+  authenticateInstitution,
+  readJson,
+  extractIdempotencyKey,
+  acquireOrGetIdempotentResponse,
+  saveIdempotentResponse,
+} from '../middleware';
 
 export const studentsRouter = new Hono<{ Bindings: Env }>();
 
@@ -295,12 +302,60 @@ studentsRouter.post('/:institutionId/students', async (c) => {
 
   if (!name) return c.json({ error: 'Student name is required' }, 400);
 
-  const nameParts = name.split(' ');
-  const firstName = nameParts[0];
+  const nameParts = name.split(/\s+/);
+  const firstName = nameParts[0] || 'Student';
   const lastName = nameParts.slice(1).join(' ') || null;
 
   const { DB } = c.env;
   const instId = auth.institutionId;
+
+  // 1. Idempotency Check
+  const idempotencyKey = extractIdempotencyKey(c, body);
+  const cachedResponse = await acquireOrGetIdempotentResponse(DB, instId, idempotencyKey, '/students');
+  if (cachedResponse) {
+    return c.json(cachedResponse.body, cachedResponse.status as any);
+  }
+
+  // 2. Duplicate Check by Name & Phone
+  if (phone) {
+    const existing = await DB.prepare(
+      `SELECT id FROM students
+       WHERE institution_id = ? AND first_name = ? AND COALESCE(last_name, '') = ? AND phone = ? AND deleted_at IS NULL
+       LIMIT 1`
+    )
+      .bind(instId, firstName, lastName || '', phone)
+      .first<{ id: string }>();
+
+    if (existing) {
+      return c.json(
+        {
+          error: `A student named '${name}' with phone '${phone}' is already enrolled in this institution.`,
+          existingStudentId: existing.id,
+        },
+        409
+      );
+    }
+  }
+
+  // 3. Burst Duplicate Check (within 10s)
+  const burstStudent = await DB.prepare(
+    `SELECT id FROM students
+     WHERE institution_id = ? AND first_name = ? AND COALESCE(last_name, '') = ? AND deleted_at IS NULL
+       AND created_at >= datetime('now', '-10 seconds')
+     LIMIT 1`
+  )
+    .bind(instId, firstName, lastName || '')
+    .first<{ id: string }>();
+
+  if (burstStudent) {
+    return c.json(
+      {
+        error: `A student enrollment request for '${name}' was just processed. Rapid duplicate submissions are blocked.`,
+        existingStudentId: burstStudent.id,
+      },
+      409
+    );
+  }
 
   // Resolve or create academic year
   let year = await DB.prepare(
@@ -434,7 +489,12 @@ studentsRouter.post('/:institutionId/students', async (c) => {
     return c.json({ error: 'Failed to create student and enrollment records' }, 500);
   }
 
-  return c.json({ success: true, studentId, admissionNo, name }, 201);
+  const responseBody = { success: true, studentId, admissionNo, name };
+  if (idempotencyKey) {
+    await saveIdempotentResponse(DB, instId, idempotencyKey, '/students', 201, responseBody);
+  }
+
+  return c.json(responseBody, 201);
 });
 
 studentsRouter.put('/:institutionId/students/:studentId', async (c) => {

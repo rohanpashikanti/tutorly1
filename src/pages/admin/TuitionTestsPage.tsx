@@ -63,6 +63,7 @@ export const TuitionTestsPage: React.FC = () => {
 
   // Modal for new tuition test
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [newTestData, setNewTestData] = useState({
     name: '',
     type: 'Unit Test' as TuitionTest['type'],
@@ -245,11 +246,12 @@ export const TuitionTestsPage: React.FC = () => {
 
   const handleCreateTest = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTestData.name.trim()) {
-      showToast('Test name is required', 'error');
+    if (!newTestData.name.trim() || isSubmitting) {
+      if (!newTestData.name.trim()) showToast('Test name is required', 'error');
       return;
     }
 
+    setIsSubmitting(true);
     try {
       const res = await api.assessments.create(activeInstitutionId, {
         name: newTestData.name.trim(),
@@ -270,6 +272,8 @@ export const TuitionTestsPage: React.FC = () => {
       showToast(`Created new Tuition Test: "${newTestData.name}"`, 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to create test', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1020,11 +1024,13 @@ export const TuitionTestsPage: React.FC = () => {
 
       {/* Create Test Modal */}
       {showCreateModal && (
-        <div className="modal-backdrop" onClick={() => setShowCreateModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowCreateModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px', width: '90%' }}>
             <div className="modal-header">
               <h2 className="modal-title">Schedule New Tuition Test</h2>
-              <button onClick={() => setShowCreateModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowCreateModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleCreateTest}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
@@ -1037,6 +1043,7 @@ export const TuitionTestsPage: React.FC = () => {
                     required
                     placeholder="e.g. Physics Chapter 3 Test"
                     value={newTestData.name}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewTestData({ ...newTestData, name: e.target.value })}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
@@ -1049,6 +1056,7 @@ export const TuitionTestsPage: React.FC = () => {
                     </label>
                     <select
                       value={newTestData.type}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTestData({ ...newTestData, type: e.target.value as any })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -1065,6 +1073,7 @@ export const TuitionTestsPage: React.FC = () => {
                     </label>
                     <select
                       value={newTestData.subject}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTestData({ ...newTestData, subject: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -1086,6 +1095,7 @@ export const TuitionTestsPage: React.FC = () => {
                     </label>
                     <select
                       value={newTestData.class}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTestData({ ...newTestData, class: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -1105,6 +1115,7 @@ export const TuitionTestsPage: React.FC = () => {
                     </label>
                     <select
                       value={newTestData.batch}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTestData({ ...newTestData, batch: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -1129,6 +1140,7 @@ export const TuitionTestsPage: React.FC = () => {
                       required
                       min="1"
                       value={newTestData.maxMarks}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTestData({ ...newTestData, maxMarks: Number(e.target.value) || 50 })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -1143,6 +1155,7 @@ export const TuitionTestsPage: React.FC = () => {
                       required
                       min="15"
                       value={newTestData.durationMinutes}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewTestData({ ...newTestData, durationMinutes: Number(e.target.value) || 60 })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -1156,6 +1169,7 @@ export const TuitionTestsPage: React.FC = () => {
                   <input
                     type="text"
                     value={newTestData.dateTime}
+                    disabled={isSubmitting}
                     placeholder="e.g. 2026-10-28 10:00 AM"
                     onChange={(e) => setNewTestData({ ...newTestData, dateTime: e.target.value })}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
@@ -1164,11 +1178,20 @@ export const TuitionTestsPage: React.FC = () => {
               </div>
 
               <div className="modal-footer" style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowCreateModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  Schedule Test
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Scheduling...' : 'Schedule Test'}
                 </button>
               </div>
             </form>

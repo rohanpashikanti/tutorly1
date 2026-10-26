@@ -1,5 +1,12 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import {
+  Env,
+  authenticateInstitution,
+  readJson,
+  extractIdempotencyKey,
+  getIdempotentResponse,
+  saveIdempotentResponse,
+} from '../middleware';
 
 export const attendanceRouter = new Hono<{ Bindings: Env }>();
 
@@ -136,6 +143,14 @@ attendanceRouter.post('/:institutionId/attendance/submit', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
+  const idempotencyKey = extractIdempotencyKey(c, body);
+  if (idempotencyKey) {
+    const cached = await getIdempotentResponse(DB, instId, idempotencyKey);
+    if (cached) {
+      return c.json(cached.body, cached.status as any);
+    }
+  }
+
   // Resolve academic year, class, and batch
   let year = await DB.prepare(`SELECT id FROM academic_years WHERE institution_id = ? AND status = 'active'`)
     .bind(instId)
@@ -242,7 +257,12 @@ attendanceRouter.post('/:institutionId/attendance/submit', async (c) => {
     }
   }
 
-  return c.json({ success: true, message: 'Attendance recorded successfully', sessionId });
+  const responsePayload = { success: true, message: 'Attendance recorded successfully', sessionId };
+  if (idempotencyKey) {
+    await saveIdempotentResponse(DB, instId, idempotencyKey, '/attendance/submit', 200, responsePayload);
+  }
+
+  return c.json(responsePayload);
 });
 
 attendanceRouter.get('/:institutionId/attendance/reports', async (c) => {

@@ -34,6 +34,17 @@ export const FeeCollectionPage: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState('All Payments');
   const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
   const [showCollectModal, setShowCollectModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+  );
+
+  const handleOpenCollectModal = () => {
+    setPaymentIdempotencyKey(
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+    );
+    setShowCollectModal(true);
+  };
 
   // Collect Fee form state
   const [collectForm, setCollectForm] = useState({
@@ -101,12 +112,14 @@ export const FeeCollectionPage: React.FC = () => {
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const student = students.find((s) => s.id === collectForm.studentId);
     if (!student && students.length > 0) {
       showToast('Please select a student', 'error');
       return;
     }
 
+    setIsSubmitting(true);
     try {
       if (activeInstitutionId && student) {
         await api.fees.recordPayment(activeInstitutionId, {
@@ -114,18 +127,24 @@ export const FeeCollectionPage: React.FC = () => {
           amount: collectForm.amount,
           method: collectForm.paymentMethod,
           notes: collectForm.remarks || undefined,
+          idempotencyKey: paymentIdempotencyKey,
         });
         showToast(
           `Payment of ₹${collectForm.amount} recorded for ${student.name} via ${collectForm.paymentMethod}.`,
           'success'
         );
         setShowCollectModal(false);
+        setPaymentIdempotencyKey(
+          typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+        );
         await loadFees();
       } else {
         setShowCollectModal(false);
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to record payment', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -180,7 +199,7 @@ export const FeeCollectionPage: React.FC = () => {
             <FileText size={15} />
             <span>Receipts</span>
           </button>
-          <button className="btn btn-primary" onClick={() => setShowCollectModal(true)}>
+          <button className="btn btn-primary" onClick={handleOpenCollectModal}>
             <Plus size={16} />
             <span>Collect Fee</span>
           </button>
@@ -352,7 +371,7 @@ export const FeeCollectionPage: React.FC = () => {
                           <button
                             onClick={() => {
                               setCollectForm({ ...collectForm, studentId: rec.studentId, amount: rec.totalFees });
-                              setShowCollectModal(true);
+                              handleOpenCollectModal();
                             }}
                             className="btn btn-sm btn-outline"
                             style={{ padding: '3px 8px', fontSize: '11px' }}
@@ -418,11 +437,13 @@ export const FeeCollectionPage: React.FC = () => {
 
       {/* Collect Fee Modal */}
       {showCollectModal && (
-        <div className="modal-backdrop" onClick={() => setShowCollectModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowCollectModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Record Fee Payment</h2>
-              <button onClick={() => setShowCollectModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowCollectModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleRecordPayment}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -520,8 +541,21 @@ export const FeeCollectionPage: React.FC = () => {
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowCollectModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={students.length === 0}>Record Payment</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowCollectModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting || students.length === 0}
+                >
+                  {isSubmitting ? 'Recording...' : 'Record Payment'}
+                </button>
               </div>
             </form>
           </div>

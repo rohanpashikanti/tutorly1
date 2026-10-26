@@ -80,8 +80,12 @@ export const ClassesBatchesSubjects: React.FC = () => {
   const [newSubjectCode, setNewSubjectCode] = useState('');
   const [newSubjectIsCore, setNewSubjectIsCore] = useState(true);
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const handleAddClass = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await api.academics.createClass(activeInstitutionId, { name: newClassName });
       setShowAddClassModal(false);
@@ -90,11 +94,15 @@ export const ClassesBatchesSubjects: React.FC = () => {
       await loadAcademics();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to create class', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleAddBatch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await api.academics.createBatch(activeInstitutionId, {
         className: newBatchClass,
@@ -107,11 +115,15 @@ export const ClassesBatchesSubjects: React.FC = () => {
       await loadAcademics();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to create batch', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await api.academics.createSubject(activeInstitutionId, {
         name: newSubjectName,
@@ -125,6 +137,8 @@ export const ClassesBatchesSubjects: React.FC = () => {
       await loadAcademics();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to create subject', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -587,11 +601,13 @@ export const ClassesBatchesSubjects: React.FC = () => {
 
       {/* Add Class Modal */}
       {showAddClassModal && (
-        <div className="modal-backdrop" onClick={() => setShowAddClassModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowAddClassModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Create New Class</h2>
-              <button onClick={() => setShowAddClassModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowAddClassModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleAddClass}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -602,6 +618,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     required
                     placeholder="e.g. Class 5"
                     value={newClassName}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewClassName(e.target.value)}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
@@ -611,6 +628,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                   <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Assign Class Teacher</label>
                   <select
                     value={newClassTeacher}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewClassTeacher(e.target.value)}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   >
@@ -622,8 +640,21 @@ export const ClassesBatchesSubjects: React.FC = () => {
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddClassModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Create Class</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowAddClassModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Creating...' : 'Create Class'}
+                </button>
               </div>
             </form>
           </div>
@@ -632,11 +663,13 @@ export const ClassesBatchesSubjects: React.FC = () => {
 
       {/* Add Batch Modal */}
       {showAddBatchModal && (
-        <div className="modal-backdrop" onClick={() => setShowAddBatchModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowAddBatchModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Create New Batch</h2>
-              <button onClick={() => setShowAddBatchModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowAddBatchModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleAddBatch}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -647,6 +680,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     required
                     placeholder="e.g. Batch D (Weekend)"
                     value={newBatchName}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewBatchName(e.target.value)}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
@@ -658,6 +692,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     <select
                       required
                       value={newBatchClass}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewBatchClass(e.target.value)}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -671,6 +706,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Teacher</label>
                     <select
                       value={newBatchTeacher}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewBatchTeacher(e.target.value)}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -687,14 +723,28 @@ export const ClassesBatchesSubjects: React.FC = () => {
                   <input
                     type="text"
                     value={newBatchTiming}
+                    disabled={isSubmitting}
                     onChange={(e) => setNewBatchTiming(e.target.value)}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddBatchModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Create Batch</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowAddBatchModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Creating...' : 'Create Batch'}
+                </button>
               </div>
             </form>
           </div>
@@ -703,11 +753,13 @@ export const ClassesBatchesSubjects: React.FC = () => {
 
       {/* Add Subject Modal */}
       {showAddSubjectModal && (
-        <div className="modal-backdrop" onClick={() => setShowAddSubjectModal(false)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowAddSubjectModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Add New Subject</h2>
-              <button onClick={() => setShowAddSubjectModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowAddSubjectModal(false)}>
+                <X size={20} color="#64748B" />
+              </button>
             </div>
             <form onSubmit={handleAddSubject}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -719,6 +771,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                       required
                       placeholder="e.g. Computer Science"
                       value={newSubjectName}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewSubjectName(e.target.value)}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -729,6 +782,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                       type="text"
                       placeholder="CS101"
                       value={newSubjectCode}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewSubjectCode(e.target.value)}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -740,6 +794,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     <input
                       type="checkbox"
                       checked={newSubjectIsCore}
+                      disabled={isSubmitting}
                       onChange={(e) => setNewSubjectIsCore(e.target.checked)}
                     />
                     <span>Core Mandatory Subject</span>
@@ -747,8 +802,21 @@ export const ClassesBatchesSubjects: React.FC = () => {
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddSubjectModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Add Subject</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setShowAddSubjectModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Adding...' : 'Add Subject'}
+                </button>
               </div>
             </form>
           </div>

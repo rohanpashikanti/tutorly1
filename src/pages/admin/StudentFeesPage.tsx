@@ -40,6 +40,7 @@ export const StudentFeesPage: React.FC = () => {
     remarks: 'Tuition installment received'
   });
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -133,6 +134,9 @@ export const StudentFeesPage: React.FC = () => {
       return;
     }
 
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+
     try {
       const res = await api.fees.recordPayment(activeInstitutionId, {
         studentId: activePaymentRecord.studentId,
@@ -146,6 +150,8 @@ export const StudentFeesPage: React.FC = () => {
       return;
     } catch {
       // Fallback to local state update if offline
+    } finally {
+      setIsSubmitting(false);
     }
 
     const newPaid = activePaymentRecord.paidAmount + payAmount;
@@ -551,11 +557,11 @@ export const StudentFeesPage: React.FC = () => {
 
       {/* Record Payment Modal */}
       {activePaymentRecord && (
-        <div className="modal-backdrop" onClick={() => setActivePaymentRecord(null)}>
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setActivePaymentRecord(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px', width: '90%' }}>
             <div className="modal-header">
               <h2 className="modal-title">Record Fee Payment</h2>
-              <button onClick={() => setActivePaymentRecord(null)} aria-label="Close modal">
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setActivePaymentRecord(null)} aria-label="Close modal">
                 <X size={20} color="#64748B" />
               </button>
             </div>
@@ -600,6 +606,7 @@ export const StudentFeesPage: React.FC = () => {
                     min="1"
                     max={activePaymentRecord.totalFees - activePaymentRecord.paidAmount}
                     value={paymentForm.amount}
+                    disabled={isSubmitting}
                     onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', fontWeight: 700 }}
                   />
@@ -615,6 +622,7 @@ export const StudentFeesPage: React.FC = () => {
                     </label>
                     <select
                       value={paymentForm.paymentMethod}
+                      disabled={isSubmitting}
                       onChange={(e) => setPaymentForm({ ...paymentForm, paymentMethod: e.target.value as any })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
@@ -633,6 +641,7 @@ export const StudentFeesPage: React.FC = () => {
                       type="date"
                       required
                       value={paymentForm.paymentDate}
+                      disabled={isSubmitting}
                       onChange={(e) => setPaymentForm({ ...paymentForm, paymentDate: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
@@ -646,6 +655,7 @@ export const StudentFeesPage: React.FC = () => {
                   <input
                     type="text"
                     value={paymentForm.receiptNo}
+                    disabled={isSubmitting}
                     onChange={(e) => setPaymentForm({ ...paymentForm, receiptNo: e.target.value })}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
@@ -653,11 +663,20 @@ export const StudentFeesPage: React.FC = () => {
               </div>
 
               <div className="modal-footer" style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setActivePaymentRecord(null)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setActivePaymentRecord(null)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  Confirm Payment
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Confirming...' : 'Confirm Payment'}
                 </button>
               </div>
             </form>
