@@ -316,8 +316,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
         </div>
       </div>
 
-      {/* Grid: Main Table + Right Detail Drawer */}
-      <div className={selectedClass ? "grid-split-sidebar" : ""} style={{ width: '100%' }}>
+      <div style={{ width: '100%' }}>
         
         {/* Table Column */}
         <div className="card">
@@ -369,13 +368,8 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     </tr>
                   ) : (
                     classesList.map((cls, idx) => {
-                      const isSelected = selectedClass?.id === cls.id;
                       return (
-                        <tr
-                          key={cls.id}
-                          onClick={() => setSelectedClass(cls)}
-                          style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
-                        >
+                        <tr key={cls.id}>
                           <td onClick={(e) => e.stopPropagation()}><input type="checkbox" /></td>
                           <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
                           <td>
@@ -399,7 +393,14 @@ export const ClassesBatchesSubjects: React.FC = () => {
                             <span className="badge badge-success">{cls.status}</span>
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
-                            <ChevronRight size={16} color="#94A3B8" />
+                            <button
+                              onClick={() => handleOpenEditClass(cls)}
+                              style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#6366F1', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                              title="Edit Class"
+                            >
+                              <Edit2 size={13} />
+                              <span>Edit</span>
+                            </button>
                           </td>
                         </tr>
                       );
@@ -505,98 +506,6 @@ export const ClassesBatchesSubjects: React.FC = () => {
             </div>
           )}
         </div>
-
-        {/* Right Drawer Card: Class Detail */}
-        {selectedClass && activeTab === 'Classes' && (
-          <div className="card" style={{ height: 'fit-content' }}>
-            <div style={{ padding: '20px', borderBottom: '1px solid #E2E8F0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#EEF2FF', color: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '16px' }}>
-                    {selectedClass.code}
-                  </div>
-                  <div>
-                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A' }}>{selectedClass.name}</h3>
-                    <div style={{ fontSize: '12px', color: '#64748B' }}>Academic Year 2026 - 2027</div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span className="badge badge-success">{selectedClass.status}</span>
-                  <button onClick={() => setSelectedClass(null)} style={{ padding: '4px', color: '#94A3B8' }}>
-                    <X size={16} />
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', padding: '12px', background: '#F8FAFC', borderRadius: '10px', fontSize: '12.5px' }}>
-                <div>
-                  <div style={{ color: '#94A3B8', fontSize: '11px' }}>Class Teacher</div>
-                  <div style={{ fontWeight: 600, color: '#0F172A' }}>{selectedClass.classTeacher}</div>
-                </div>
-                <div>
-                  <div style={{ color: '#94A3B8', fontSize: '11px' }}>Total Students</div>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{selectedClass.totalStudents}</div>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A', textTransform: 'uppercase' }}>Assigned Subjects (8)</span>
-                  <span style={{ fontSize: '11px', color: '#6366F1', fontWeight: 600, cursor: 'pointer' }} onClick={() => setShowAddSubjectModal(true)}>Manage</span>
-                </div>
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {['Mathematics', 'Physics', 'Chemistry', 'Biology', 'English', 'Social Studies', 'Telugu', 'Hindi'].map((sub, i) => (
-                    <span key={i} className="badge badge-purple" style={{ padding: '4px 10px', fontSize: '11.5px' }}>{sub}</span>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A', textTransform: 'uppercase' }}>Batches (3)</span>
-                  <span style={{ fontSize: '11px', color: '#6366F1', fontWeight: 600, cursor: 'pointer' }} onClick={() => setShowAddBatchModal(true)}>Add Batch</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ padding: '10px 12px', background: '#F8FAFC', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Batch A</div>
-                      <div style={{ fontSize: '11px', color: '#64748B' }}>Morning (8:00 AM - 10:00 AM)</div>
-                    </div>
-                    <span className="badge badge-neutral">18 Students</span>
-                  </div>
-
-                  <div style={{ padding: '10px 12px', background: '#F8FAFC', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Batch B</div>
-                      <div style={{ fontSize: '11px', color: '#64748B' }}>Evening (4:00 PM - 6:00 PM)</div>
-                    </div>
-                    <span className="badge badge-neutral">20 Students</span>
-                  </div>
-
-                  <div style={{ padding: '10px 12px', background: '#F8FAFC', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>Batch C</div>
-                      <div style={{ fontSize: '11px', color: '#64748B' }}>Evening (6:15 PM - 8:15 PM)</div>
-                    </div>
-                    <span className="badge badge-neutral">16 Students</span>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                className="btn btn-outline"
-                style={{ width: '100%', padding: '9px', fontSize: '13px' }}
-                onClick={() => handleOpenEditClass(selectedClass)}
-              >
-                <Edit2 size={14} />
-                <span>Edit Class Details</span>
-              </button>
-            </div>
-          </div>
-        )}
-
       </div>
 
       {/* Add Class Modal */}

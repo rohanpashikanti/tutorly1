@@ -583,4 +583,226 @@ describe('Tutorly Deduplication, Teacher Creation & Performance Audit Suite', ()
     const listSBody = (await listSRes.json()) as { students: any[] };
     expect(listSBody.students.some((s) => s.id === studentId)).toBe(false);
   });
+
+  it('12. Student fee persistence across data flow: ₹2,000, ₹2,600, ₹3,500 and ₹0 retain exact values on fees page without ₹3,000 substitution', async () => {
+    const { cookie } = await register();
+    const { institutionId } = await createInstitution(cookie);
+
+    // 1. Student with ₹2,000 fee and ₹0 initial payment
+    const resA = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Fee Student 2000',
+        class: 'Class 10',
+        batch: 'Batch A',
+        phone: '9870000001',
+        tuitionFeeAmount: 2000,
+        initialPayment: 0,
+      }),
+    });
+    expect(resA.status).toBe(201);
+    const bodyA = (await resA.json()) as any;
+    const studentAId = bodyA.studentId || bodyA.id;
+
+    // 2. Student with ₹2,600 fee and ₹0 initial payment
+    const resB = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Fee Student 2600',
+        class: 'Class 10',
+        batch: 'Batch A',
+        phone: '9870000002',
+        tuitionFeeAmount: 2600,
+        initialPayment: 0,
+      }),
+    });
+    expect(resB.status).toBe(201);
+    const bodyB = (await resB.json()) as any;
+    const studentBId = bodyB.studentId || bodyB.id;
+
+    // 3. Student with ₹3,500 fee and ₹1,000 initial payment
+    const resC = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Fee Student 3500',
+        class: 'Class 10',
+        batch: 'Batch A',
+        phone: '9870000003',
+        tuitionFeeAmount: 3500,
+        initialPayment: 1000,
+      }),
+    });
+    expect(resC.status).toBe(201);
+    const bodyC = (await resC.json()) as any;
+    const studentCId = bodyC.studentId || bodyC.id;
+
+    // 4. Student with ₹0 fee (scholarship)
+    const resD = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Fee Student Zero',
+        class: 'Class 10',
+        batch: 'Batch A',
+        phone: '9870000004',
+        tuitionFeeAmount: 0,
+        initialPayment: 0,
+      }),
+    });
+    expect(resD.status).toBe(201);
+    const bodyD = (await resD.json()) as any;
+    const studentDId = bodyD.studentId || bodyD.id;
+
+    // Verify Direct Database Records for Student A (₹2,000)
+    const faA = await db.prepare(
+      `SELECT agreed_amount_paise FROM student_fee_assignments WHERE institution_id = ? AND student_id = ?`
+    ).bind(institutionId, studentAId).first<{ agreed_amount_paise: number }>();
+    expect(faA?.agreed_amount_paise).toBe(200000); // exactly ₹2,000 in paise
+
+    const fcA = await db.prepare(
+      `SELECT amount_paise, status FROM fee_charges WHERE institution_id = ? AND student_id = ?`
+    ).bind(institutionId, studentAId).first<{ amount_paise: number; status: string }>();
+    expect(fcA?.amount_paise).toBe(200000); // MUST be 200000 paise (₹2,000), NEVER 300000 (₹3,000)!
+    expect(fcA?.status).toBe('open');
+
+    // Query GET /fees/records API
+    const feesRes = await request(`/api/institutions/${institutionId}/fees/records`, {
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    expect(feesRes.status).toBe(200);
+    const feesBody = (await feesRes.json()) as { records: any[] };
+
+    const recA = feesBody.records.find((r) => r.studentId === studentAId);
+    expect(recA).toBeDefined();
+    expect(recA.totalFees).toBe(2000); // ₹2,000, NOT ₹3,000!
+    expect(recA.paidAmount).toBe(0);
+    expect(recA.outstandingAmount).toBe(2000);
+    expect(recA.status).toBe('Pending');
+
+    const recB = feesBody.records.find((r) => r.studentId === studentBId);
+    expect(recB).toBeDefined();
+    expect(recB.totalFees).toBe(2600); // ₹2,600!
+    expect(recB.paidAmount).toBe(0);
+    expect(recB.outstandingAmount).toBe(2600);
+
+    const recC = feesBody.records.find((r) => r.studentId === studentCId);
+    expect(recC).toBeDefined();
+    expect(recC.totalFees).toBe(3500); // ₹3,500!
+    expect(recC.paidAmount).toBe(1000); // ₹1,000 paid!
+    expect(recC.outstandingAmount).toBe(2500);
+
+    const recD = feesBody.records.find((r) => r.studentId === studentDId);
+    expect(recD).toBeDefined();
+    expect(recD.totalFees).toBe(0); // ₹0!
+    expect(recD.paidAmount).toBe(0);
+    expect(recD.outstandingAmount).toBe(0);
+    expect(recD.status).toBe('Paid');
+
+    // Also verify GET /students API returns consistent fee metadata
+    const studentsRes = await request(`/api/institutions/${institutionId}/students`, {
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    expect(studentsRes.status).toBe(200);
+    const studentsBody = (await studentsRes.json()) as { students: any[] };
+
+    const stuA = studentsBody.students.find((s) => s.id === studentAId);
+    expect(stuA).toBeDefined();
+    expect(stuA.fees.totalFee).toBe(2000);
+    expect(stuA.fees.pendingAmount).toBe(2000);
+    expect(stuA.fees.nextDueAmount).toBe(2000); // not capped at 3000!
+  });
+
+  it('13. Sequential student creation maintains strict multi-record isolation and validation protection', async () => {
+    const { cookie } = await register();
+    const { institutionId } = await createInstitution(cookie);
+
+    // 1. Create first student
+    const s1 = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Student One',
+        class: 'Class 8',
+        batch: 'Batch A',
+        phone: '9550000001',
+        tuitionFeeAmount: 2200,
+      }),
+    });
+    expect(s1.status).toBe(201);
+    const body1 = (await s1.json()) as any;
+    const id1 = body1.studentId || body1.id;
+
+    // 2. Create second student with distinct details
+    const s2 = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Student Two',
+        class: 'Class 9',
+        batch: 'Batch B',
+        phone: '9550000002',
+        tuitionFeeAmount: 2800,
+      }),
+    });
+    expect(s2.status).toBe(201);
+    const body2 = (await s2.json()) as any;
+    const id2 = body2.studentId || body2.id;
+
+    // 3. Edit student 2 - verify student 1 remains completely unchanged
+    const edit2 = await request(`/api/institutions/${institutionId}/students/${id2}`, {
+      method: 'PUT',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Student Two Updated',
+        class: 'Class 9',
+        batch: 'Batch B',
+        phone: '9550000002',
+        fatherName: 'Guardian Two',
+      }),
+    });
+    expect(edit2.status).toBe(200);
+
+    const checkList = await request(`/api/institutions/${institutionId}/students`, {
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    const listJson = (await checkList.json()) as { students: any[] };
+    const fetched1 = listJson.students.find((s) => s.id === id1);
+    const fetched2 = listJson.students.find((s) => s.id === id2);
+
+    expect(fetched1.name).toBe('Student One');
+    expect(fetched1.class).toBe('Class 8');
+    expect(fetched2.name).toBe('Student Two Updated');
+
+    // 4. Failed create attempt (duplicate name & phone) returns 409 and does not corrupt database
+    const failRes = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Student One',
+        phone: '9550000001', // duplicate of student 1
+        tuitionFeeAmount: 1500,
+      }),
+    });
+    expect(failRes.status).toBe(409);
+
+    // 5. Invalid create attempt (missing name) returns 400
+    const invalidRes = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '',
+        phone: '9550000009',
+      }),
+    });
+    expect(invalidRes.status).toBe(400);
+
+    // Total count remains exactly 2
+    const countCheck = await db.prepare(
+      `SELECT COUNT(*) as count FROM students WHERE institution_id = ? AND deleted_at IS NULL`
+    ).bind(institutionId).first<{ count: number }>();
+    expect(countCheck?.count).toBe(2);
+  });
 });

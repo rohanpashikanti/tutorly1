@@ -196,7 +196,7 @@ studentsRouter.get('/:institutionId/students', async (c) => {
         paidAmount: feeInfo.paid,
         pendingAmount: feeInfo.pending,
         nextDue: feeInfo.nextDue,
-        nextDueAmount: feeInfo.pending > 0 ? Math.min(feeInfo.pending, 3000) : 0,
+        nextDueAmount: feeInfo.pending > 0 ? feeInfo.pending : 0,
         status: feeInfo.status,
       },
     };
@@ -297,8 +297,19 @@ studentsRouter.post('/:institutionId/students', async (c) => {
   const fatherName = typeof body.fatherName === 'string' ? body.fatherName.trim() : 'Parent';
   const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
   const email = typeof body.email === 'string' ? body.email.trim() : '';
-  const tuitionFeeAmount = Number(body.tuitionFeeAmount ?? 36000);
-  const initialPayment = Number(body.initialPayment ?? 0);
+  const rawTuition = body.tuitionFeeAmount !== undefined && body.tuitionFeeAmount !== null && body.tuitionFeeAmount !== ''
+    ? Number(body.tuitionFeeAmount)
+    : 0;
+  const tuitionFeeAmount = !isNaN(rawTuition) && rawTuition >= 0 ? rawTuition : 0;
+
+  const rawInitPay = body.initialPayment !== undefined && body.initialPayment !== null && body.initialPayment !== ''
+    ? Number(body.initialPayment)
+    : 0;
+  const initialPayment = !isNaN(rawInitPay) && rawInitPay >= 0 ? rawInitPay : 0;
+
+  const feeDueDate = typeof body.feeDueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.feeDueDate.trim())
+    ? body.feeDueDate.trim()
+    : null;
 
   if (!name) return c.json({ error: 'Student name is required' }, 400);
 
@@ -449,18 +460,23 @@ studentsRouter.post('/:institutionId/students', async (c) => {
        VALUES (?, ?, ?, ?, 'Annual Tuition Fee', ?, 0, strftime('%Y-%m-%d', 'now'), 'active')`
     ).bind(feeAssignmentId, instId, studentId, enrollmentId, Math.round(tuitionFeeAmount * 100)),
 
-    // 6. Create Initial Fee Charge
+    // 6. Create Initial Fee Charge using the entered applicable tuition fee amount
     DB.prepare(
       `INSERT INTO fee_charges (id, institution_id, student_id, enrollment_id, assignment_id, installment_no, description, due_on, amount_paise, status)
-       VALUES (?, ?, ?, ?, ?, 1, 'Term 1 / Monthly Tuition Installment', date('now', '+10 days'), ?, ?)`
+       VALUES (?, ?, ?, ?, ?, 1, 'Term 1 / Monthly Tuition Installment', ?, ?, ?)`
     ).bind(
       chargeId,
       instId,
       studentId,
       enrollmentId,
       feeAssignmentId,
-      Math.round((initialPayment > 0 ? initialPayment : 3000) * 100),
-      initialPayment > 0 ? 'paid' : 'open'
+      feeDueDate || new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      Math.round(tuitionFeeAmount * 100),
+      tuitionFeeAmount === 0 || initialPayment >= tuitionFeeAmount
+        ? 'paid'
+        : initialPayment > 0
+        ? 'partial'
+        : 'open'
     ),
   ];
 
@@ -468,17 +484,19 @@ studentsRouter.post('/:institutionId/students', async (c) => {
   if (initialPayment > 0) {
     const paymentId = `pmt-${crypto.randomUUID().slice(0, 8)}`;
     const receiptNo = `REC-2026-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
-    const amountPaise = Math.round(initialPayment * 100);
+    const paymentPaise = Math.round(initialPayment * 100);
+    const chargePaise = Math.round(tuitionFeeAmount * 100);
+    const allocatedPaise = Math.min(paymentPaise, chargePaise);
 
     statements.push(
       DB.prepare(
         `INSERT INTO payments (id, institution_id, student_id, amount_paise, currency_code, method, receipt_no, status, received_at, recorded_by_membership_id)
          VALUES (?, ?, ?, ?, 'INR', 'cash', ?, 'received', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)`
-      ).bind(paymentId, instId, studentId, amountPaise, receiptNo, auth.membership.id),
+      ).bind(paymentId, instId, studentId, paymentPaise, receiptNo, auth.membership.id),
       DB.prepare(
         `INSERT INTO payment_allocations (institution_id, payment_id, charge_id, student_id, amount_paise)
          VALUES (?, ?, ?, ?, ?)`
-      ).bind(instId, paymentId, chargeId, studentId, amountPaise)
+      ).bind(instId, paymentId, chargeId, studentId, allocatedPaise)
     );
   }
 

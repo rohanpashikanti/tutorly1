@@ -52,12 +52,6 @@ export const StudentDirectory: React.FC = () => {
     typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
   );
 
-  const handleOpenAddModal = () => {
-    setAddStudentIdempotencyKey(
-      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
-    );
-    setShowAddModal(true);
-  };
 
   const loadStudents = React.useCallback(async () => {
     if (!activeInstitutionId) return;
@@ -105,8 +99,7 @@ export const StudentDirectory: React.FC = () => {
       .catch(() => {});
   }, [activeInstitutionId]);
 
-  // New student form state including individual fee assignment
-  const [formData, setFormData] = useState({
+  const initialStudentFormData = {
     name: '',
     class: '',
     batch: '',
@@ -119,9 +112,13 @@ export const StudentDirectory: React.FC = () => {
     billingFrequency: 'Monthly',
     initialPayment: 0,
     feeDueDate: ''
-  });
+  };
+
+  // New student form state including individual fee assignment
+  const [formData, setFormData] = useState(initialStudentFormData);
 
   // Edit student form state
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [editFormData, setEditFormData] = useState({
     name: '',
     class: '',
@@ -131,24 +128,53 @@ export const StudentDirectory: React.FC = () => {
     fatherName: '',
   });
 
+  const handleOpenAddModal = () => {
+    setFormData({
+      ...initialStudentFormData,
+      class: availableClasses[0]?.name || '',
+      batch: availableBatches[0]?.name || '',
+    });
+    setAddStudentIdempotencyKey(
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
+    );
+    setShowAddModal(true);
+  };
+
+  const handleCloseAddModal = () => {
+    if (isSubmitting) return;
+    setShowAddModal(false);
+    setFormData({
+      ...initialStudentFormData,
+      class: availableClasses[0]?.name || '',
+      batch: availableBatches[0]?.name || '',
+    });
+  };
+
   const handleOpenEdit = (student: Student) => {
+    setEditingStudent(student);
     setEditFormData({
-      name: student.name,
-      class: student.class,
-      batch: student.batch,
-      phone: student.parent.phone,
-      email: student.parent.email,
-      fatherName: student.parent.fatherName,
+      name: student.name || '',
+      class: student.class || availableClasses[0]?.name || '',
+      batch: student.batch || availableBatches[0]?.name || '',
+      phone: student.parent?.phone || student.phone || '',
+      email: student.parent?.email || student.email || '',
+      fatherName: student.parent?.fatherName || student.parentName || '',
     });
     setShowEditModal(true);
   };
 
+  const handleCloseEditModal = () => {
+    if (isSubmitting) return;
+    setShowEditModal(false);
+    setEditingStudent(null);
+  };
+
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeDrawerStudent || isSubmitting) return;
+    if (!editingStudent || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await api.students.update(activeInstitutionId, activeDrawerStudent.id, {
+      await api.students.update(activeInstitutionId, editingStudent.id, {
         name: editFormData.name,
         phone: editFormData.phone,
         email: editFormData.email,
@@ -157,6 +183,7 @@ export const StudentDirectory: React.FC = () => {
         batch: editFormData.batch,
       });
       setShowEditModal(false);
+      setEditingStudent(null);
       showToast(`Updated profile for ${editFormData.name}`, 'success');
       await loadStudents();
     } catch (err) {
@@ -218,13 +245,19 @@ export const StudentDirectory: React.FC = () => {
     e.preventDefault();
     if (isSubmitting) return;
     setIsSubmitting(true);
+    const studentName = formData.name;
     try {
       await api.students.create(activeInstitutionId, {
         ...formData,
         idempotencyKey: addStudentIdempotencyKey,
       });
       setShowAddModal(false);
-      showToast(`Student ${formData.name} enrolled and tuition fee assigned!`, 'success');
+      setFormData({
+        ...initialStudentFormData,
+        class: availableClasses[0]?.name || '',
+        batch: availableBatches[0]?.name || '',
+      });
+      showToast(`Student ${studentName} enrolled and tuition fee assigned!`, 'success');
       setAddStudentIdempotencyKey(
         typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
       );
@@ -686,11 +719,11 @@ export const StudentDirectory: React.FC = () => {
 
       {/* Add Student Modal */}
       {showAddModal && (
-        <div className="modal-backdrop" onClick={() => setShowAddModal(false)}>
+        <div className="modal-backdrop" onClick={handleCloseAddModal}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Add New Student</h2>
-              <button onClick={() => setShowAddModal(false)}><X size={20} color="#64748B" /></button>
+              <button disabled={isSubmitting} onClick={handleCloseAddModal}><X size={20} color="#64748B" /></button>
             </div>
             <form onSubmit={handleAddStudentSubmit}>
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -856,7 +889,7 @@ export const StudentDirectory: React.FC = () => {
                   type="button"
                   className="btn btn-secondary"
                   disabled={isSubmitting}
-                  onClick={() => !isSubmitting && setShowAddModal(false)}
+                  onClick={handleCloseAddModal}
                 >
                   Cancel
                 </button>
@@ -874,12 +907,12 @@ export const StudentDirectory: React.FC = () => {
       )}
 
       {/* Edit Student Modal */}
-      {showEditModal && activeDrawerStudent && (
-        <div className="modal-backdrop" onClick={() => !isSubmitting && setShowEditModal(false)}>
+      {showEditModal && editingStudent && (
+        <div className="modal-backdrop" onClick={handleCloseEditModal}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2 className="modal-title">Edit Student Profile — {activeDrawerStudent.name}</h2>
-              <button disabled={isSubmitting} onClick={() => !isSubmitting && setShowEditModal(false)}>
+              <h2 className="modal-title">Edit Student Profile — {editingStudent.name}</h2>
+              <button disabled={isSubmitting} onClick={handleCloseEditModal}>
                 <X size={20} color="#64748B" />
               </button>
             </div>
@@ -976,7 +1009,7 @@ export const StudentDirectory: React.FC = () => {
                   type="button"
                   className="btn btn-secondary"
                   disabled={isSubmitting}
-                  onClick={() => !isSubmitting && setShowEditModal(false)}
+                  onClick={handleCloseEditModal}
                 >
                   Cancel
                 </button>

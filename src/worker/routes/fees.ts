@@ -60,7 +60,7 @@ feesRouter.get('/:institutionId/fees/records', async (c) => {
     SELECT s.id AS student_id, s.first_name, s.last_name, s.avatar_url,
            c.name AS class_name,
            COALESCE(fa.description, 'Annual Tuition Fee') AS fee_plan_name,
-           COALESCE(SUM(fc.amount_paise), 0) AS total_charges_paise,
+           COALESCE(NULLIF(SUM(fc.amount_paise), 0), fa.agreed_amount_paise, 0) AS total_charges_paise,
            COALESCE((
              SELECT SUM(pa.amount_paise)
              FROM payment_allocations pa
@@ -76,7 +76,7 @@ feesRouter.get('/:institutionId/fees/records', async (c) => {
     LEFT JOIN student_fee_assignments fa ON fa.student_id = s.id AND fa.institution_id = s.institution_id AND fa.status = 'active'
     LEFT JOIN fee_charges fc ON fc.student_id = s.id AND fc.institution_id = s.institution_id AND fc.status NOT IN ('waived', 'void')
     WHERE s.institution_id = ? AND s.deleted_at IS NULL
-    GROUP BY s.id, s.first_name, s.last_name, s.avatar_url, c.name, fa.description
+    GROUP BY s.id, s.first_name, s.last_name, s.avatar_url, c.name, fa.description, fa.agreed_amount_paise
     ORDER BY s.roll_no, s.first_name
   `;
 
