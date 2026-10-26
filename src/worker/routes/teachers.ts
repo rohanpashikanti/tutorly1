@@ -83,11 +83,11 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
       dob: t.date_of_birth || '',
       gender: (t.gender as 'Male' | 'Female') || 'Female',
       address: t.address || '',
-      subjects: subjects.length > 0 ? subjects : ['General Academics'],
-      classes: classes.length > 0 ? classes : ['All Batches'],
+      subjects,
+      classes,
       status: t.status === 'active' ? ('Active' as const) : ('Inactive' as const),
       totalStudents: teacherStudentsMap.get(t.id) || 0,
-      totalClasses: classes.length || 1,
+      totalClasses: classes.length,
     };
   });
 

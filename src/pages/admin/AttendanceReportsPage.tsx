@@ -1,47 +1,86 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Download,
   Users,
   CheckCircle2,
   XCircle,
   Clock,
   Printer,
-  Award,
-  AlertTriangle,
   FileSpreadsheet
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BarChart, DonutChart } from '../../components/charts/Charts';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { Student } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
+import { api } from '../../api/client';
+import { getStoredStudents } from '../../utils/storage';
 
 export const AttendanceReportsPage: React.FC = () => {
-  const { showToast } = useApp();
-  const [selectedClass, setSelectedClass] = useState('Class 10');
-  const [selectedBatch, setSelectedBatch] = useState('Batch A');
+  const { showToast, activeInstitutionId } = useApp();
+  const [selectedClass, setSelectedClass] = useState('All Classes');
+  const [selectedBatch, setSelectedBatch] = useState('All Batches');
   const [dateRange, setDateRange] = useState('1 Oct 2026 - 31 Oct 2026');
+  const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reports, setReports] = useState<{
+    overallRate: number;
+    presentCount: number;
+    absentCount: number;
+    avgRate: number;
+    classBreakdown: { label: string; value: number; color?: string }[];
+  }>({
+    overallRate: 0,
+    presentCount: 0,
+    absentCount: 0,
+    avgRate: 0,
+    classBreakdown: []
+  });
 
-  // Class breakdown data
-  const classBreakdown = [
-    { label: 'Class 6', value: 92, color: '#C7D2FE' },
-    { label: 'Class 7', value: 88, color: '#C7D2FE' },
-    { label: 'Class 8', value: 81, color: '#C7D2FE' },
-    { label: 'Class 9', value: 84, color: '#C7D2FE' },
-    { label: 'Class 10', value: 86, color: '#6366F1' },
-    { label: 'Class 11', value: 79, color: '#C7D2FE' },
-    { label: 'Class 12', value: 83, color: '#C7D2FE' },
-  ];
+  const loadData = useCallback(async () => {
+    if (!activeInstitutionId) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const [stuRes, repRes] = await Promise.all([
+        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
+        api.attendance.getReports(activeInstitutionId).catch(() => null)
+      ]);
+      setStudents(stuRes.students || []);
+
+      if (repRes) {
+        setReports({
+          overallRate: repRes.overallRate || 0,
+          presentCount: repRes.presentCount || 0,
+          absentCount: repRes.absentCount || 0,
+          avgRate: repRes.avgRate || 0,
+          classBreakdown: repRes.classBreakdown || []
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load attendance report:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load attendance reports');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeInstitutionId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const filteredStudents = students.filter((s) => {
+    const matchesClass = selectedClass === 'All Classes' || s.class === selectedClass;
+    const matchesBatch = selectedBatch === 'All Batches' || s.batch === selectedBatch;
+    return matchesClass && matchesBatch;
+  });
 
   const handleExportCSV = () => {
-    const data = MOCK_STUDENTS.map((st, i) => ({
+    const data = filteredStudents.map((st) => ({
       RollNo: st.rollNo,
       Name: st.name,
-      Class: selectedClass,
-      Batch: selectedBatch,
-      PresentDays: 26 - i,
-      AbsentDays: 2 + i,
-      LateDays: i % 2,
+      Class: st.class,
+      Batch: st.batch,
       AttendancePercentage: `${st.attendanceRate}%`,
       DateRange: dateRange,
     }));
@@ -50,13 +89,10 @@ export const AttendanceReportsPage: React.FC = () => {
   };
 
   const handleExportPDF = () => {
-    const rows = MOCK_STUDENTS.map((st, i) => ({
+    const rows = filteredStudents.map((st) => ({
       rollNo: st.rollNo,
       name: st.name,
-      classBatch: `${selectedClass} - ${selectedBatch}`,
-      presentDays: 26 - i,
-      absentDays: 2 + i,
-      lateDays: i % 2,
+      classBatch: `${st.class} - ${st.batch}`,
       rate: `${st.attendanceRate}%`
     }));
 
@@ -67,21 +103,18 @@ export const AttendanceReportsPage: React.FC = () => {
         { label: 'Class', value: selectedClass },
         { label: 'Batch', value: selectedBatch },
         { label: 'Period', value: dateRange },
-        { label: 'Total Students', value: String(MOCK_STUDENTS.length) }
+        { label: 'Total Students', value: String(filteredStudents.length) }
       ],
       summaryStats: [
-        { label: 'Overall Attendance', value: '86%' },
-        { label: 'Total Present', value: '1,892' },
-        { label: 'Total Absent', value: '248' },
-        { label: 'Avg per Student', value: '85.7%' }
+        { label: 'Overall Attendance', value: `${reports.overallRate}%` },
+        { label: 'Total Present', value: String(reports.presentCount) },
+        { label: 'Total Absent', value: String(reports.absentCount) },
+        { label: 'Avg per Student', value: `${reports.avgRate}%` }
       ],
       columns: [
         { header: 'Roll No', key: 'rollNo', align: 'center' },
         { header: 'Student Name', key: 'name', align: 'left' },
         { header: 'Class & Batch', key: 'classBatch', align: 'left' },
-        { header: 'Present Days', key: 'presentDays', align: 'center' },
-        { header: 'Absent Days', key: 'absentDays', align: 'center' },
-        { header: 'Late Days', key: 'lateDays', align: 'center' },
         { header: 'Attendance %', key: 'rate', align: 'center' }
       ],
       rows,
@@ -116,12 +149,21 @@ export const AttendanceReportsPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadData()}>Retry</button>
+        </div>
+      )}
+
       {/* Filter Row */}
       <div className="filter-bar" style={{ marginBottom: '20px' }}>
         <div className="filter-controls">
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Class</label>
             <select className="select-field" value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
+              <option>All Classes</option>
               <option>Class 10</option>
               <option>Class 9</option>
               <option>Class 8</option>
@@ -131,17 +173,9 @@ export const AttendanceReportsPage: React.FC = () => {
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Batch</label>
             <select className="select-field" value={selectedBatch} onChange={(e) => setSelectedBatch(e.target.value)}>
+              <option>All Batches</option>
               <option>Batch A</option>
               <option>Batch B</option>
-            </select>
-          </div>
-
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Subject</label>
-            <select className="select-field">
-              <option>All Subjects</option>
-              <option>Mathematics</option>
-              <option>Science</option>
             </select>
           </div>
 
@@ -171,9 +205,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Overall Attendance</div>
-            <div className="stat-value">86%</div>
+            <div className="stat-value">{isLoading ? '—' : `${reports.overallRate}%`}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">1,892 of 2,200 classes</span>
+              <span className="stat-subtext">Cumulative rate</span>
             </div>
           </div>
         </div>
@@ -184,10 +218,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Present Count</div>
-            <div className="stat-value">1,892</div>
+            <div className="stat-value">{isLoading ? '—' : reports.presentCount}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↑ +5%</span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">Recorded attendances</span>
             </div>
           </div>
         </div>
@@ -198,10 +231,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Absent Count</div>
-            <div className="stat-value">248</div>
+            <div className="stat-value">{isLoading ? '—' : reports.absentCount}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↓ -12%</span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">Recorded absences</span>
             </div>
           </div>
         </div>
@@ -212,72 +244,60 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Avg per Student</div>
-            <div className="stat-value">85.7%</div>
+            <div className="stat-value">{isLoading ? '—' : `${reports.avgRate}%`}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Across 28 students</span>
+              <span className="stat-subtext">Across {filteredStudents.length} students</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Class & Subject Breakdown Cards (Attendance Trend removed completely per requirement) */}
-      <div className="grid-2-col" style={{ marginBottom: '20px' }}>
-        {/* Attendance by Class */}
-        <div className="card">
+      {/* Attendance by Class */}
+      {reports.classBreakdown.length > 0 && (
+        <div className="card" style={{ marginBottom: '20px' }}>
           <div className="card-header">
             <div className="card-title">Attendance by Class</div>
             <span style={{ fontSize: '11px', color: '#64748B' }}>All Classes Summary</span>
           </div>
           <div className="card-body">
-            <BarChart data={classBreakdown} height={170} />
+            <BarChart data={reports.classBreakdown} height={170} />
           </div>
         </div>
+      )}
 
-        {/* Attendance by Subject */}
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">Subject-wise Breakdown</div>
-            <span className="badge badge-purple">{selectedClass}</span>
-          </div>
-          <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-            <DonutChart value={86} size={110} label="86%" sublabel="Overall" color="#6366F1" />
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Mathematics</span><strong>92%</strong></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Science</span><strong>88%</strong></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>English</span><strong>84%</strong></div>
-            </div>
-          </div>
+      {/* Student Attendance Summary Table */}
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">Student Attendance Breakdown ({filteredStudents.length})</div>
         </div>
-      </div>
 
-      {/* Row 2: Student-wise Table + Summary & Top/Needs Attention */}
-      <div className="grid-split-balanced">
-        
-        {/* Student-wise Attendance Table */}
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">Student-wise Attendance</div>
-            <button className="btn btn-sm btn-secondary" onClick={handleExportCSV}>
-              <Download size={13} />
-              <span>Export</span>
-            </button>
-          </div>
-
-          <div className="table-container data-table-desktop">
-            <table className="data-table">
-              <thead>
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th style={{ width: '40px' }}>#</th>
+                <th>Student Name</th>
+                <th>Roll No.</th>
+                <th>Class</th>
+                <th>Batch</th>
+                <th>Attendance %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredStudents.length === 0 ? (
                 <tr>
-                  <th style={{ width: '40px' }}>#</th>
-                  <th>Student Name</th>
-                  <th>Roll No.</th>
-                  <th>Present</th>
-                  <th>Absent</th>
-                  <th>Late</th>
-                  <th>Attendance %</th>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                    <Users size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                    <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                      No students found
+                    </div>
+                    <div style={{ fontSize: '13px' }}>
+                      No student records match the selected class and batch filters.
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {MOCK_STUDENTS.map((st, i) => (
+              ) : (
+                filteredStudents.map((st, i) => (
                   <tr key={st.id}>
                     <td style={{ color: '#94A3B8', fontSize: '12px' }}>{i + 1}</td>
                     <td>
@@ -287,137 +307,19 @@ export const AttendanceReportsPage: React.FC = () => {
                       </div>
                     </td>
                     <td>{st.rollNo}</td>
-                    <td><span style={{ color: '#10B981', fontWeight: 600 }}>{26 - i}</span></td>
-                    <td><span style={{ color: '#EF4444', fontWeight: 600 }}>{2 + i}</span></td>
-                    <td><span style={{ color: '#F59E0B', fontWeight: 600 }}>{i % 2}</span></td>
+                    <td>{st.class}</td>
+                    <td>{st.batch}</td>
                     <td>
                       <span className={`badge ${st.attendanceRate >= 85 ? 'badge-success' : 'badge-warning'}`}>
                         {st.attendanceRate}%
                       </span>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mobile Attendance Performance Cards */}
-          <div className="data-cards-mobile">
-            {MOCK_STUDENTS.map((st, i) => (
-              <div key={st.id} className="responsive-data-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <img src={st.avatar} alt={st.name} style={{ width: '36px', height: '36px', borderRadius: '50%', objectFit: 'cover' }} />
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '14px', color: '#0F172A' }}>{st.name}</div>
-                      <div style={{ fontSize: '11.5px', color: '#64748B' }}>Roll #{st.rollNo}</div>
-                    </div>
-                  </div>
-                  <span className={`badge ${st.attendanceRate >= 85 ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '12px', padding: '3px 8px' }}>
-                    {st.attendanceRate}%
-                  </span>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', background: '#F8FAFC', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Present</div>
-                    <div style={{ fontSize: '15px', fontWeight: 800, color: '#10B981', marginTop: '2px' }}>
-                      {26 - i} days
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Absent</div>
-                    <div style={{ fontSize: '15px', fontWeight: 800, color: '#EF4444', marginTop: '2px' }}>
-                      {2 + i} days
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Late</div>
-                    <div style={{ fontSize: '15px', fontWeight: 800, color: '#F59E0B', marginTop: '2px' }}>
-                      {i % 2} days
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-
-        {/* Summary & Performers Cards */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
-          <div className="card">
-            <div className="card-header">
-              <div className="card-title">Attendance Summary</div>
-            </div>
-            <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span style={{ color: '#64748B' }}>Total Working Days</span>
-                <strong>25</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span style={{ color: '#64748B' }}>Total Classes</span>
-                <strong>2,200</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span style={{ color: '#64748B' }}>Total Present</span>
-                <strong style={{ color: '#10B981' }}>1,892 (86%)</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #F1F5F9' }}>
-                <span style={{ color: '#64748B' }}>Total Absent</span>
-                <strong style={{ color: '#EF4444' }}>248 (11%)</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-                <span style={{ color: '#64748B' }}>Average per Student</span>
-                <strong>85.7%</strong>
-              </div>
-            </div>
-          </div>
-
-          {/* Top Performers & Needs Attention */}
-          <div className="card">
-            <div className="card-header">
-              <div className="card-title">Performance Insights</div>
-            </div>
-            <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#10B981', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-                  <Award size={14} />
-                  <span>Top Attendance Performers</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12.5px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>1. Aditya Sharma</span>
-                    <strong style={{ color: '#10B981' }}>93%</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>2. Harshith Reddy</span>
-                    <strong style={{ color: '#10B981' }}>93%</strong>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '10px' }}>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#EF4444', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-                  <AlertTriangle size={14} />
-                  <span>Needs Attention (Below 75%)</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12.5px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>1. Nithya Sree</span>
-                    <strong style={{ color: '#EF4444' }}>72%</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>2. Manish Verma</span>
-                    <strong style={{ color: '#EF4444' }}>65%</strong>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
       </div>
     </div>
   );

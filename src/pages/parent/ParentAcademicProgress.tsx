@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Award,
   Download,
@@ -9,6 +9,14 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { api } from '../../api/client';
+import {
+  getStoredTuitionTests,
+  getStoredTuitionTestMarks,
+  getStoredSchoolExams,
+  getStoredSchoolExamMarks,
+  getStoredStudents
+} from '../../utils/storage';
 import { downloadSampleDocument } from '../../utils/demoActions';
 
 interface AcademicResult {
@@ -23,43 +31,90 @@ interface AcademicResult {
 }
 
 export const ParentAcademicProgress: React.FC = () => {
-  const { selectedChildId, setSelectedChildId, selectedChild, showToast } = useApp();
+  const { selectedChildId, setSelectedChildId, activeInstitutionId, showToast } = useApp();
+  const [children, setChildren] = useState<any[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<'All' | 'Tuition Test' | 'School Examination'>('All');
   const [subjectFilter, setSubjectFilter] = useState<string>('All');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const isAditya = selectedChildId === 'stu-001';
+  useEffect(() => {
+    api.portals.getParent(activeInstitutionId)
+      .then((res) => {
+        if (res && res.children) {
+          setChildren(res.children);
+          if (res.children.length > 0 && !selectedChildId) {
+            setSelectedChildId(res.children[0].id);
+          }
+        }
+      })
+      .catch((err) => {
+        setLoadError(err.message || 'Failed to load children');
+        const stored = getStoredStudents();
+        setChildren(stored);
+      });
+  }, [activeInstitutionId, selectedChildId, setSelectedChildId]);
 
-  // Real chronological results for selected child
-  const adityaResults: AcademicResult[] = [
-    { id: 'ar-1', date: '25 Oct 2026', name: 'Unit Test 3', category: 'Tuition Test', subject: 'Mathematics', marksObtained: 46, maxMarks: 50, percentage: 92 },
-    { id: 'ar-2', date: '22 Oct 2026', name: 'Monthly Test', category: 'Tuition Test', subject: 'Science', marksObtained: 42, maxMarks: 50, percentage: 84 },
-    { id: 'ar-3', date: '18 Oct 2026', name: 'Unit Test 2', category: 'Tuition Test', subject: 'English', marksObtained: 38, maxMarks: 50, percentage: 76 },
-    { id: 'ar-4', date: '10 Oct 2026', name: 'Half-Yearly Examination', category: 'School Examination', subject: 'Science', marksObtained: 84, maxMarks: 100, percentage: 84 },
-    { id: 'ar-5', date: '08 Oct 2026', name: 'Half-Yearly Examination', category: 'School Examination', subject: 'Mathematics', marksObtained: 92, maxMarks: 100, percentage: 92 },
-    { id: 'ar-6', date: '06 Oct 2026', name: 'Half-Yearly Examination', category: 'School Examination', subject: 'Social Studies', marksObtained: 88, maxMarks: 100, percentage: 88 },
-    { id: 'ar-7', date: '04 Oct 2026', name: 'Half-Yearly Examination', category: 'School Examination', subject: 'English', marksObtained: 78, maxMarks: 100, percentage: 78 },
-    { id: 'ar-8', date: '28 Sep 2026', name: 'Chapter Test', category: 'Tuition Test', subject: 'Social Studies', marksObtained: 44, maxMarks: 50, percentage: 88 }
-  ];
+  const activeChild = children.find((c) => c.id === selectedChildId) || children[0] || null;
 
-  const kavyaResults: AcademicResult[] = [
-    { id: 'kr-1', date: '24 Oct 2026', name: 'Monthly Evaluation', category: 'Tuition Test', subject: 'Science', marksObtained: 43, maxMarks: 50, percentage: 86 },
-    { id: 'kr-2', date: '20 Oct 2026', name: 'Unit Test 2', category: 'Tuition Test', subject: 'Mathematics', marksObtained: 39, maxMarks: 50, percentage: 78 },
-    { id: 'kr-3', date: '16 Oct 2026', name: 'Vocabulary & Grammar Test', category: 'Tuition Test', subject: 'English', marksObtained: 41, maxMarks: 50, percentage: 82 },
-    { id: 'kr-4', date: '09 Oct 2026', name: 'Term 1 Exam', category: 'School Examination', subject: 'Science', marksObtained: 85, maxMarks: 100, percentage: 85 },
-    { id: 'kr-5', date: '07 Oct 2026', name: 'Term 1 Exam', category: 'School Examination', subject: 'Mathematics', marksObtained: 79, maxMarks: 100, percentage: 79 },
-    { id: 'kr-6', date: '05 Oct 2026', name: 'Term 1 Exam', category: 'School Examination', subject: 'English', marksObtained: 81, maxMarks: 100, percentage: 81 },
-    { id: 'kr-7', date: '26 Sep 2026', name: 'Monthly Test', category: 'Tuition Test', subject: 'Social Studies', marksObtained: 40, maxMarks: 50, percentage: 80 }
-  ];
+  // Real chronological results for active child
+  const allChildResults: AcademicResult[] = useMemo(() => {
+    if (!activeChild) return [];
+    const results: AcademicResult[] = [];
 
-  const allChildResults = isAditya ? adityaResults : kavyaResults;
+    // Tuition tests
+    const tests = getStoredTuitionTests();
+    const testMarksMap = getStoredTuitionTestMarks();
+    tests.forEach((t) => {
+      const marksList = testMarksMap[t.id] || [];
+      const m = marksList.find((entry) => entry.studentId === activeChild.id || entry.studentName === activeChild.name);
+      if (m && m.marks !== undefined && m.marks !== null) {
+        results.push({
+          id: `tt-${t.id}`,
+          date: t.dateTime || '—',
+          name: t.name,
+          category: 'Tuition Test',
+          subject: t.subject || 'General',
+          marksObtained: m.marks,
+          maxMarks: m.maxMarks || t.maxMarks || 100,
+          percentage: m.percentage || (m.maxMarks ? Math.round((m.marks / m.maxMarks) * 100) : 0)
+        });
+      }
+    });
+
+    // School exams
+    const exams = getStoredSchoolExams();
+    const examMarksMap = getStoredSchoolExamMarks();
+    exams.forEach((ex) => {
+      const marksList = examMarksMap[ex.id] || [];
+      const m = marksList.find((entry) => entry.studentId === activeChild.id || entry.studentName === activeChild.name);
+      if (m && m.marks !== undefined && m.marks !== null) {
+        results.push({
+          id: `exam-${ex.id}`,
+          date: ex.startDate || '—',
+          name: ex.name,
+          category: 'School Examination',
+          subject: 'All Subjects',
+          marksObtained: m.marks,
+          maxMarks: m.maxMarks || 100,
+          percentage: m.percentage || (m.maxMarks ? Math.round((m.marks / m.maxMarks) * 100) : 0)
+        });
+      }
+    });
+
+    return results;
+  }, [activeChild]);
+
+  const subjects = useMemo(() => {
+    const set = new Set<string>();
+    allChildResults.forEach((r) => set.add(r.subject));
+    return ['All', ...Array.from(set)];
+  }, [allChildResults]);
 
   const filteredResults = allChildResults.filter((item) => {
     const matchesCat = categoryFilter === 'All' || item.category === categoryFilter;
     const matchesSub = subjectFilter === 'All' || item.subject === subjectFilter;
     return matchesCat && matchesSub;
   });
-
-  const subjects = ['All', 'Mathematics', 'Science', 'English', 'Social Studies'];
 
   return (
     <div className="page-container">
@@ -80,15 +135,17 @@ export const ParentAcademicProgress: React.FC = () => {
         <div className="page-header-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button
             className="btn btn-secondary"
+            disabled={!activeChild || filteredResults.length === 0}
             onClick={() => {
+              if (!activeChild) return;
               downloadSampleDocument(
-                `${selectedChild.name}_Academic_Report.pdf`,
-                `TUTORLY ACADEMIC RESULTS REPORT\n\nStudent: ${selectedChild.name}\nClass: ${selectedChild.class}\nRoll No: ${selectedChild.rollNo}\nDate Generated: 25 Oct 2026\n\nRecent Results:\n` +
+                `${activeChild.name}_Academic_Report.pdf`,
+                `TUTORLY ACADEMIC RESULTS REPORT\n\nStudent: ${activeChild.name}\nClass: ${activeChild.class || 'N/A'}\nRoll No: ${activeChild.rollNo || 'N/A'}\nDate Generated: ${new Date().toLocaleDateString()}\n\nRecent Results:\n` +
                   filteredResults
                     .map((r) => `- ${r.date}: ${r.name} (${r.subject}) - ${r.marksObtained}/${r.maxMarks} (${r.percentage}%) [${r.category}]`)
                     .join('\n')
               );
-              showToast(`Downloaded academic report for ${selectedChild.name}`, 'success');
+              showToast(`Downloaded academic report for ${activeChild.name}`, 'success');
             }}
             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
@@ -97,6 +154,12 @@ export const ParentAcademicProgress: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', color: '#991B1B', fontSize: '13px' }}>
+          Unable to refresh portal children from server: {loadError}
+        </div>
+      )}
 
       {/* Child Switcher & Filter Toolbar */}
       <div
@@ -110,51 +173,36 @@ export const ParentAcademicProgress: React.FC = () => {
         }}
       >
         {/* Child Selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>Student:</span>
-          <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: '10px', padding: '3px' }}>
-            <button
-              onClick={() => {
-                setSelectedChildId('stu-001');
-                showToast('Viewing Aditya Sharma (Class 10)', 'info');
-              }}
-              style={{
-                border: 'none',
-                background: isAditya ? '#FFFFFF' : 'transparent',
-                color: isAditya ? '#4F46E5' : '#475569',
-                fontWeight: isAditya ? 700 : 500,
-                fontSize: '12.5px',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                boxShadow: isAditya ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              Aditya Sharma (Class 10)
-            </button>
-            <button
-              onClick={() => {
-                setSelectedChildId('stu-002');
-                showToast('Viewing Kavya Sharma (Class 9)', 'info');
-              }}
-              style={{
-                border: 'none',
-                background: !isAditya ? '#FFFFFF' : 'transparent',
-                color: !isAditya ? '#4F46E5' : '#475569',
-                fontWeight: !isAditya ? 700 : 500,
-                fontSize: '12.5px',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                boxShadow: !isAditya ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              Kavya Sharma (Class 9)
-            </button>
+        {children.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>Student:</span>
+            <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: '10px', padding: '3px' }}>
+              {children.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => {
+                    setSelectedChildId(c.id);
+                    showToast(`Viewing ${c.name} (${c.class})`, 'info');
+                  }}
+                  style={{
+                    border: 'none',
+                    background: c.id === activeChild?.id ? '#FFFFFF' : 'transparent',
+                    color: c.id === activeChild?.id ? '#4F46E5' : '#475569',
+                    fontWeight: c.id === activeChild?.id ? 700 : 500,
+                    fontSize: '12.5px',
+                    padding: '6px 14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    boxShadow: c.id === activeChild?.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {c.name} ({c.class})
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Filters */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -206,7 +254,7 @@ export const ParentAcademicProgress: React.FC = () => {
               Test & Exam Results ({filteredResults.length})
             </h3>
             <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-              Showing chronological academic results for {isAditya ? 'Aditya Sharma (Class 10)' : 'Kavya Sharma (Class 9)'}
+              Showing chronological academic results for {activeChild ? `${activeChild.name} (${activeChild.class})` : 'Student'}
             </div>
           </div>
         </div>
@@ -219,18 +267,22 @@ export const ParentAcademicProgress: React.FC = () => {
                 No results found
               </div>
               <div style={{ fontSize: '13px', color: '#64748B' }}>
-                No academic records match the selected type or subject filter.
+                {!activeChild
+                  ? 'No child is linked to this parent account.'
+                  : 'No academic records match the selected type or subject filter.'}
               </div>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  setCategoryFilter('All');
-                  setSubjectFilter('All');
-                }}
-                style={{ marginTop: '8px' }}
-              >
-                Reset Filters
-              </button>
+              {(categoryFilter !== 'All' || subjectFilter !== 'All') && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setCategoryFilter('All');
+                    setSubjectFilter('All');
+                  }}
+                  style={{ marginTop: '8px' }}
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
           </div>
         ) : (

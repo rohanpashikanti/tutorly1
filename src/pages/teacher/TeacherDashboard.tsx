@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../api/client';
+import { getStoredStudents, getStoredTuitionTests } from '../../utils/storage';
 
 export const TeacherDashboard: React.FC = () => {
   const { currentUser, navigateTo, showToast, activeInstitutionId } = useApp();
@@ -57,6 +58,7 @@ export const TeacherDashboard: React.FC = () => {
       </div>
 
       {/* 4 Square-Style Metric Cards */}
+      {/* 4 Square-Style Metric Cards */}
       <div className="teacher-kpi-grid">
         <div className="teacher-kpi-card">
           <div className="teacher-kpi-top">
@@ -66,21 +68,21 @@ export const TeacherDashboard: React.FC = () => {
             </div>
           </div>
           <div className="teacher-kpi-body">
-            <div className="teacher-kpi-value">{teacherData?.totalAssignedStudents ?? 56}</div>
+            <div className="teacher-kpi-value">{teacherData?.totalAssignedStudents ?? 0}</div>
             <div className="teacher-kpi-subtext">Across assigned cohorts</div>
           </div>
         </div>
 
         <div className="teacher-kpi-card">
           <div className="teacher-kpi-top">
-            <span className="teacher-kpi-label">Today's Classes</span>
+            <span className="teacher-kpi-label">Assigned Cohorts</span>
             <div className="teacher-kpi-icon" style={{ backgroundColor: '#DBEAFE', color: '#3B82F6' }}>
               <Calendar size={20} />
             </div>
           </div>
           <div className="teacher-kpi-body">
-            <div className="teacher-kpi-value">3 Sessions</div>
-            <div className="teacher-kpi-subtext">Next class at 09:00 AM</div>
+            <div className="teacher-kpi-value">{teacherData?.assignedBatches?.length ?? 0} Batches</div>
+            <div className="teacher-kpi-subtext">Active teaching assignments</div>
           </div>
         </div>
 
@@ -92,9 +94,9 @@ export const TeacherDashboard: React.FC = () => {
             </div>
           </div>
           <div className="teacher-kpi-body">
-            <div className="teacher-kpi-value">84.6%</div>
-            <div className="teacher-kpi-subtext" style={{ color: '#10B981', fontWeight: 600 }}>
-              ↑ 3.2% vs last assessment
+            <div className="teacher-kpi-value">{teacherData?.batchAverageScore ? `${teacherData.batchAverageScore}%` : '—'}</div>
+            <div className="teacher-kpi-subtext" style={{ color: '#64748B' }}>
+              Assessment performance
             </div>
           </div>
         </div>
@@ -107,8 +109,8 @@ export const TeacherDashboard: React.FC = () => {
             </div>
           </div>
           <div className="teacher-kpi-body">
-            <div className="teacher-kpi-value">94.2%</div>
-            <div className="teacher-kpi-subtext">This month across batches</div>
+            <div className="teacher-kpi-value">{teacherData?.averageAttendance ? `${teacherData.averageAttendance}%` : '—'}</div>
+            <div className="teacher-kpi-subtext">Across assigned cohorts</div>
           </div>
         </div>
       </div>
@@ -122,80 +124,50 @@ export const TeacherDashboard: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Calendar size={18} color="#6366F1" />
-                <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>Today's Teaching Schedule</h3>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>Assigned Teaching Batches</h3>
               </div>
-              <span className="badge badge-purple">Wednesday, 28 Oct 2026</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {[
-                {
-                  time: '09:00 AM - 10:30 AM',
-                  class: 'Class 10 - A (Morning Batch)',
-                  subject: 'Mathematics',
-                  topic: 'Trigonometry & Heights/Distances',
-                  room: 'Room 101',
-                  status: 'Upcoming',
-                  actionText: 'Mark Attendance',
-                  actionRoute: 'attendance-register'
-                },
-                {
-                  time: '11:00 AM - 12:30 PM',
-                  class: 'Class 9 - B (Morning Batch)',
-                  subject: 'Science',
-                  topic: 'Gravitation & Laws of Motion',
-                  room: 'Lab 2',
-                  status: 'Upcoming',
-                  actionText: 'Mark Attendance',
-                  actionRoute: 'attendance-register'
-                },
-                {
-                  time: '04:30 PM - 06:00 PM',
-                  class: 'Class 10 - A (Evening)',
-                  subject: 'Mathematics',
-                  topic: 'Doubt Clearing & Test Paper Discussion',
-                  room: 'Room 101',
-                  status: 'Scheduled',
-                  actionText: 'View Syllabus',
-                  actionRoute: 'teacher-classes'
-                }
-              ].map((sess, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '14px 16px',
-                    borderRadius: '10px',
-                    backgroundColor: '#F8FAFC',
-                    border: '1px solid #E2E8F0',
-                    flexWrap: 'wrap',
-                    gap: '12px'
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#6366F1' }}>{sess.time}</span>
-                      <span className="badge badge-gray" style={{ fontSize: '11px' }}>{sess.room}</span>
-                    </div>
-                    <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '14px' }}>
-                      {sess.class} · <span style={{ color: '#6366F1' }}>{sess.subject}</span>
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                      Topic: {sess.topic}
-                    </div>
-                  </div>
-
-                  <button
-                    className="btn btn-secondary"
-                    style={{ padding: '6px 12px', fontSize: '12.5px' }}
-                    onClick={() => navigateTo(sess.actionRoute)}
-                  >
-                    {sess.actionText}
-                  </button>
+              {!teacherData?.assignedBatches || teacherData.assignedBatches.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '28px', color: '#64748B', background: '#F8FAFC', borderRadius: '8px', fontSize: '13px' }}>
+                  No teaching classes or cohorts currently assigned.
                 </div>
-              ))}
+              ) : (
+                teacherData.assignedBatches.map((b: any, idx: number) => (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '14px 16px',
+                      borderRadius: '10px',
+                      backgroundColor: '#F8FAFC',
+                      border: '1px solid #E2E8F0',
+                      flexWrap: 'wrap',
+                      gap: '12px'
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: '200px' }}>
+                      <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '14px' }}>
+                        {b.class_name} {b.batch_name ? `• ${b.batch_name}` : ''} · <span style={{ color: '#6366F1' }}>{b.subject_name}</span>
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                        Enrolled Students: {b.student_count || 0}
+                      </div>
+                    </div>
+
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '6px 12px', fontSize: '12.5px' }}
+                      onClick={() => navigateTo('attendance-register')}
+                    >
+                      Mark Attendance
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -260,51 +232,45 @@ export const TeacherDashboard: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {[
-                {
-                  name: 'Charan Kumar',
-                  class: 'Class 10 - A',
-                  issue: 'Attendance dropped to 78% this month',
-                  avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80'
-                },
-                {
-                  name: 'Harshith Reddy',
-                  class: 'Class 9 - B',
-                  issue: 'Missed last 2 assignments in Mathematics',
-                  avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80'
-                },
-                {
-                  name: 'Divya Nair',
-                  class: 'Class 10 - A',
-                  issue: 'Scored 64% in Algebra (Previous: 82%)',
-                  avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80'
-                }
-              ].map((stu, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '10px 12px',
-                    borderRadius: '8px',
-                    backgroundColor: '#FEF3C7',
-                    border: '1px solid #FDE68A'
-                  }}
-                >
-                  <img
-                    src={stu.avatar}
-                    alt={stu.name}
-                    style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover' }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#92400E' }}>
-                      {stu.name} <span style={{ fontSize: '11px', fontWeight: 500 }}>({stu.class})</span>
+              {(() => {
+                const storedStudents = getStoredStudents();
+                const flagged = storedStudents.filter(s => s.status === 'Needs Attention' || (s.attendanceRate > 0 && s.attendanceRate < 80));
+                if (flagged.length === 0) {
+                  return (
+                    <div style={{ textAlign: 'center', padding: '20px', color: '#64748B', background: '#F8FAFC', borderRadius: '8px', fontSize: '12.5px' }}>
+                      No students currently flagged for academic or attendance concerns.
                     </div>
-                    <div style={{ fontSize: '11.5px', color: '#B45309' }}>{stu.issue}</div>
+                  );
+                }
+                return flagged.map((stu) => (
+                  <div
+                    key={stu.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: '#FEF3C7',
+                      border: '1px solid #FDE68A'
+                    }}
+                  >
+                    <img
+                      src={stu.avatar}
+                      alt={stu.name}
+                      style={{ width: '34px', height: '34px', borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#92400E' }}>
+                        {stu.name} <span style={{ fontSize: '11px', fontWeight: 500 }}>({stu.class})</span>
+                      </div>
+                      <div style={{ fontSize: '11.5px', color: '#B45309' }}>
+                        {stu.attendanceRate > 0 ? `Attendance at ${stu.attendanceRate}%` : 'Attendance / Academic attention needed'}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ));
+              })()}
             </div>
           </div>
 
@@ -325,25 +291,27 @@ export const TeacherDashboard: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>Mathematics Unit Test</span>
-                  <span className="badge badge-purple">Class 10 - A</span>
-                </div>
-                <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '4px' }}>
-                  Scheduled 28 Oct • Max Marks: 50
-                </div>
-              </div>
-
-              <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>Physics Chapter Test</span>
-                  <span className="badge badge-purple">Class 9 - B</span>
-                </div>
-                <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '4px' }}>
-                  Scheduled 30 Oct • Max Marks: 50
-                </div>
-              </div>
+              {(() => {
+                const storedTests = getStoredTuitionTests();
+                if (storedTests.length === 0) {
+                  return (
+                    <div style={{ textAlign: 'center', padding: '20px', color: '#64748B', background: '#F8FAFC', borderRadius: '8px', fontSize: '12.5px' }}>
+                      No upcoming tuition tests scheduled.
+                    </div>
+                  );
+                }
+                return storedTests.slice(0, 3).map((t) => (
+                  <div key={t.id} style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>{t.name}</span>
+                      <span className="badge badge-purple">{t.class}</span>
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '4px' }}>
+                      Subject: {t.subject} • Max Marks: {t.maxMarks}
+                    </div>
+                  </div>
+                ));
+              })()}
             </div>
           </div>
         </div>

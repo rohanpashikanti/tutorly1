@@ -107,7 +107,7 @@ portalsRouter.get('/:institutionId/parent/portal', async (c) => {
       .first<{ total_marked: number; attended: number }>();
 
     const attendanceRate =
-      attRaw && attRaw.total_marked > 0 ? Math.round((attRaw.attended / attRaw.total_marked) * 100) : 94;
+      attRaw && attRaw.total_marked > 0 ? Math.round((attRaw.attended / attRaw.total_marked) * 100) : 0;
 
     // Child fee balance
     const feesRaw = await DB.prepare(
@@ -121,22 +121,22 @@ portalsRouter.get('/:institutionId/parent/portal', async (c) => {
       .bind(child.id, instId, child.id, instId)
       .first<{ total_charges: number; total_paid: number }>();
 
-    const totalFee = feesRaw ? Math.round(feesRaw.total_charges / 100) : 36000;
-    const paidAmount = feesRaw ? Math.round(feesRaw.total_paid / 100) : 36000;
+    const totalFee = feesRaw ? Math.round(feesRaw.total_charges / 100) : 0;
+    const paidAmount = feesRaw ? Math.round(feesRaw.total_paid / 100) : 0;
     const pendingAmount = Math.max(0, totalFee - paidAmount);
 
     children.push({
       id: child.id,
       name: `${child.first_name} ${child.last_name || ''}`.trim(),
       admissionNo: child.admission_no,
-      rollNo: child.roll_no || '001',
+      rollNo: child.roll_no || '—',
       avatar:
         child.avatar_url ||
         'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-      class: child.class_name || 'Class 10',
-      batch: child.batch_name || 'Batch A',
+      class: child.class_name || 'Unassigned',
+      batch: child.batch_name || 'Unassigned',
       attendanceRate,
-      academicScore: 84,
+      academicScore: 0,
       fees: {
         totalFee,
         paidAmount,
@@ -198,10 +198,8 @@ portalsRouter.get('/:institutionId/teacher/portal', async (c) => {
     totalAssignedStudents = raw.results.reduce((sum, r) => sum + (r.student_count || 0), 0);
   }
 
-  if (totalAssignedStudents === 0) totalAssignedStudents = 56;
-
   return c.json({
-    teacher: teacher || { teacher_code: 'T-FACULTY', designation: 'Faculty' },
+    teacher: teacher || null,
     totalAssignedStudents,
     assignedBatches,
   });

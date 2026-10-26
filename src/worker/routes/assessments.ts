@@ -62,9 +62,9 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
         name: e.name,
         type: mappedType,
         classes: e.class_name,
-        subjectsCount: 6,
-        startDate: e.starts_at ? e.starts_at.slice(0, 10) : '2026-10-15',
-        endDate: e.ends_at ? e.ends_at.slice(0, 10) : '2026-10-22',
+        subjectsCount: 1,
+        startDate: e.starts_at ? e.starts_at.slice(0, 10) : '',
+        endDate: e.ends_at ? e.ends_at.slice(0, 10) : '',
         status: mappedStatus,
         academicYear: e.academic_year,
       };
@@ -81,7 +81,7 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
       if (t.status === 'scheduled') mappedStatus = 'Scheduled';
       else if (t.status === 'ongoing') mappedStatus = 'Ongoing';
 
-      const avgPercent = t.avg_marks && t.max_marks > 0 ? Math.round((t.avg_marks / t.max_marks) * 100) : 78;
+      const avgPercent = t.avg_marks && t.max_marks > 0 ? Math.round((t.avg_marks / t.max_marks) * 100) : 0;
 
       return {
         id: t.id,
@@ -90,8 +90,8 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
         class: t.class_name,
         batch: t.batch_name || 'Batch A',
         subject: t.subject_name,
-        dateTime: t.starts_at || '2026-10-24 16:30',
-        durationMinutes: t.duration_minutes || 60,
+        dateTime: t.starts_at || '',
+        durationMinutes: t.duration_minutes || 0,
         maxMarks: t.max_marks,
         status: mappedStatus,
         averageScore: avgPercent,
@@ -257,14 +257,16 @@ assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (
 
   const marksList = enrolled.results.map((e, idx) => {
     const existing = marksMap.get(e.student_id);
-    const marksVal = existing?.marks ?? (asm.max_marks === 100 ? 75 + (idx % 20) : Math.round(asm.max_marks * 0.8));
-    const percentage = asm.max_marks > 0 ? Math.round((marksVal / asm.max_marks) * 100) : 0;
-    let grade = 'A';
-    if (percentage >= 90) grade = 'A+';
-    else if (percentage >= 80) grade = 'A';
-    else if (percentage >= 70) grade = 'B';
-    else if (percentage >= 60) grade = 'C';
-    else grade = 'D';
+    const marksVal = existing?.marks ?? null;
+    const percentage = marksVal !== null && asm.max_marks > 0 ? Math.round((marksVal / asm.max_marks) * 100) : 0;
+    let grade = '—';
+    if (marksVal !== null) {
+      if (percentage >= 90) grade = 'A+';
+      else if (percentage >= 80) grade = 'A';
+      else if (percentage >= 70) grade = 'B';
+      else if (percentage >= 60) grade = 'C';
+      else grade = 'D';
+    }
 
     return {
       studentId: e.student_id,
@@ -278,8 +280,8 @@ assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (
       maxMarks: asm.max_marks,
       grade,
       percentage,
-      remarks: existing?.remarks || 'Good performance',
-      status: (existing?.status === 'published' ? 'Published' : 'Entered') as 'Draft' | 'Entered' | 'Published',
+      remarks: existing?.remarks || '',
+      status: (existing?.status === 'published' ? 'Published' : existing ? 'Entered' : 'Draft') as 'Draft' | 'Entered' | 'Published',
     };
   });
 

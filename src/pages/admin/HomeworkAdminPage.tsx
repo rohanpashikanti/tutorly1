@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   BookMarked,
   Plus,
@@ -16,13 +16,19 @@ import {
   Check
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_HOMEWORK, MOCK_STUDENTS } from '../../data/mockData';
+import {
+  getStoredHomework,
+  saveStoredHomework,
+  getStoredStudents,
+  getStoredClasses,
+  getStoredSubjects
+} from '../../utils/storage';
 import { HomeworkItem } from '../../types';
 import { downloadCSV, downloadSampleDocument } from '../../utils/demoActions';
 
 export const HomeworkAdminPage: React.FC = () => {
-  const { showToast } = useApp();
-  const [homeworkList, setHomeworkList] = useState<HomeworkItem[]>(MOCK_HOMEWORK);
+  const { showToast, currentUser } = useApp();
+  const [homeworkList, setHomeworkList] = useState<HomeworkItem[]>(getStoredHomework);
   const [selectedClass, setSelectedClass] = useState<string>('All Classes');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -33,18 +39,31 @@ export const HomeworkAdminPage: React.FC = () => {
     title: '',
     class: 'Class 10 - A',
     subject: 'Mathematics',
-    assignedDate: '2026-10-25',
-    dueDate: '2026-10-28',
+    assignedDate: new Date().toISOString().split('T')[0],
+    dueDate: '',
     description: '',
   });
 
-  const [submissions, setSubmissions] = useState([
-    { id: '1', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, submittedAt: '2026-10-26 14:30', status: 'Graded', score: '10/10' },
-    { id: '2', name: 'Bhavana Reddy', rollNo: '002', avatar: MOCK_STUDENTS[2].avatar, submittedAt: '2026-10-26 16:15', status: 'Graded', score: '9/10' },
-    { id: '3', name: 'Charan Kumar', rollNo: '003', avatar: MOCK_STUDENTS[3].avatar, submittedAt: '2026-10-27 10:00', status: 'Submitted', score: 'Pending' },
-    { id: '4', name: 'Divya Nair', rollNo: '004', avatar: MOCK_STUDENTS[4].avatar, submittedAt: '2026-10-27 11:20', status: 'Submitted', score: 'Pending' },
-    { id: '5', name: 'Harshith Reddy', rollNo: '005', avatar: MOCK_STUDENTS[5].avatar, submittedAt: '—', status: 'Missing', score: '—' },
-  ]);
+  const [submissions, setSubmissions] = useState<any[]>([]);
+
+  const handleOpenReview = (hw: HomeworkItem) => {
+    setActiveReviewHw(hw);
+    const students = getStoredStudents();
+    const enrolled = students.filter(
+      (s) => !hw.class || hw.class === 'All Classes' || s.class === hw.class || hw.class.includes(s.class)
+    );
+    setSubmissions(
+      enrolled.map((s) => ({
+        id: s.id,
+        name: s.name,
+        rollNo: s.rollNo,
+        avatar: s.avatar,
+        submittedAt: '—',
+        status: 'Pending',
+        score: '—',
+      }))
+    );
+  };
 
   const handleExportCSV = () => {
     const data = filteredHomework.map((hw) => ({
@@ -54,8 +73,8 @@ export const HomeworkAdminPage: React.FC = () => {
       AssignedDate: hw.assignedDate,
       DueDate: hw.dueDate,
       AssignedBy: hw.assignedBy || hw.teacherName || 'Tutor',
-      Submitted: `${hw.submittedCount || 0}/${hw.totalCount || 30}`,
-      SubmissionRate: `${Math.round(((hw.submittedCount || 0) / (hw.totalCount || 30)) * 100)}%`,
+      Submitted: `${hw.submittedCount || 0}/${hw.totalCount || 0}`,
+      SubmissionRate: `${hw.totalCount ? Math.round(((hw.submittedCount || 0) / hw.totalCount) * 100) : 0}%`,
     }));
     downloadCSV('Homework_Assignments_Tracking.csv', data);
     showToast(`Exported ${data.length} homework records to CSV`, 'success');
@@ -63,31 +82,47 @@ export const HomeworkAdminPage: React.FC = () => {
 
   const handleCreateHomework = (e: React.FormEvent) => {
     e.preventDefault();
+    const students = getStoredStudents();
+    const enrolledCount = students.filter(
+      (s) => !newHw.class || newHw.class === 'All Classes' || s.class === newHw.class || newHw.class.includes(s.class)
+    ).length;
+
     const item: HomeworkItem = {
       id: `hw-${Date.now()}`,
       title: newHw.title,
       class: newHw.class,
       subject: newHw.subject,
       assignedDate: newHw.assignedDate,
-      dueDate: newHw.dueDate,
+      dueDate: newHw.dueDate || 'Upcoming',
       description: newHw.description,
-      assignedBy: 'Administrator',
+      assignedBy: currentUser?.name || 'Administrator',
       submittedCount: 0,
-      totalCount: 30,
+      totalCount: enrolledCount,
       status: 'Pending',
     };
-    setHomeworkList([item, ...homeworkList]);
+
+    const updated = [item, ...homeworkList];
+    setHomeworkList(updated);
+    saveStoredHomework(updated);
     setShowAssignModal(false);
     setNewHw({
       title: '',
       class: 'Class 10 - A',
       subject: 'Mathematics',
-      assignedDate: '2026-10-25',
-      dueDate: '2026-10-28',
+      assignedDate: new Date().toISOString().split('T')[0],
+      dueDate: '',
       description: '',
     });
     showToast(`Assigned homework "${item.title}" to ${item.class}!`, 'success');
   };
+
+  const availableClasses = useMemo(() => {
+    const set = new Set<string>();
+    homeworkList.forEach((hw) => {
+      if (hw.class) set.add(hw.class);
+    });
+    return ['All Classes', ...Array.from(set)];
+  }, [homeworkList]);
 
   const filteredHomework = homeworkList.filter((hw) => {
     const matchesClass = selectedClass === 'All Classes' || hw.class.includes(selectedClass);
@@ -101,102 +136,60 @@ export const HomeworkAdminPage: React.FC = () => {
   return (
     <div className="page-container">
       {/* Header */}
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+      <div className="page-header">
         <div className="page-header-title">
           <div className="breadcrumb">
-            <span>Assessments</span>
+            <span>Academic Management</span>
             <span>/</span>
-            <span style={{ color: '#0F172A', fontWeight: 600 }}>Homework</span>
+            <span style={{ color: '#0F172A', fontWeight: 600 }}>Homework Tracking</span>
           </div>
-          <h1>Homework Tracking & Reviews</h1>
+          <h1>Homework & Assignments</h1>
           <p className="page-subtitle">
-            Track daily assignments, syllabus coverage, and submission rates across all batches.
+            Manage curriculum homework assignments, monitor turn-in compliance, and verify submissions.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn btn-secondary" onClick={handleExportCSV}>
+
+        <div className="page-header-actions" style={{ display: 'flex', gap: '8px' }}>
+          <button
+            className="btn btn-secondary"
+            disabled={filteredHomework.length === 0}
+            onClick={handleExportCSV}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
             <Download size={15} />
             <span>Export CSV</span>
           </button>
-          <button className="btn btn-primary" onClick={() => setShowAssignModal(true)}>
-            <Plus size={15} />
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowAssignModal(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
+            <Plus size={16} />
             <span>Assign Homework</span>
           </button>
         </div>
       </div>
 
-      {/* 4 Stats Cards */}
-      <div className="stats-grid" style={{ marginBottom: '24px' }}>
-        <div className="stat-card">
-          <div className="stat-card-header">
-            <span className="stat-card-title">Active Assignments</span>
-            <div className="stat-card-icon" style={{ backgroundColor: '#EEF2FF', color: '#6366F1' }}>
-              <BookMarked size={18} />
-            </div>
-          </div>
-          <div className="stat-card-value">14</div>
-          <div className="stat-card-subtext">Across all classes</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-card-header">
-            <span className="stat-card-title">Average Submission Rate</span>
-            <div className="stat-card-icon" style={{ backgroundColor: '#DCFCE7', color: '#10B981' }}>
-              <CheckCircle2 size={18} />
-            </div>
-          </div>
-          <div className="stat-card-value">86.4%</div>
-          <div className="stat-card-trend trend-up">
-            <span>↑ 4.2% this week</span>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-card-header">
-            <span className="stat-card-title">Pending Submissions</span>
-            <div className="stat-card-icon" style={{ backgroundColor: '#FEF3C7', color: '#F59E0B' }}>
-              <Clock size={18} />
-            </div>
-          </div>
-          <div className="stat-card-value">38</div>
-          <div className="stat-card-subtext">Awaiting student turn-in</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-card-header">
-            <span className="stat-card-title">Pending Reviews</span>
-            <div className="stat-card-icon" style={{ backgroundColor: '#DBEAFE', color: '#3B82F6' }}>
-              <FileText size={18} />
-            </div>
-          </div>
-          <div className="stat-card-value">12</div>
-          <div className="stat-card-subtext">Requires teacher grading</div>
-        </div>
-      </div>
-
-      {/* Filter Bar */}
-      <div className="card" style={{ marginBottom: '24px', padding: '16px 20px' }}>
+      {/* Filter Toolbar */}
+      <div className="card" style={{ marginBottom: '20px', padding: '16px 20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <label style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Class Filter:</label>
-            <select
-              className="form-control"
-              style={{ width: '180px' }}
-              value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
-            >
-              <option value="All Classes">All Classes</option>
-              <option value="Class 10">Class 10</option>
-              <option value="Class 9">Class 9</option>
-              <option value="Class 8">Class 8</option>
-            </select>
+          <div className="tabs-container" style={{ margin: 0 }}>
+            {availableClasses.map((cls) => (
+              <button
+                key={cls}
+                className={`tab-btn ${selectedClass === cls ? 'active' : ''}`}
+                onClick={() => setSelectedClass(cls)}
+              >
+                {cls}
+              </button>
+            ))}
           </div>
 
           <div className="search-box" style={{ width: '280px' }}>
             <Search size={14} className="search-icon" />
             <input
               type="text"
-              placeholder="Search by topic, subject, or tutor..."
+              placeholder="Search by assignment, subject, tutor..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
@@ -222,55 +215,83 @@ export const HomeworkAdminPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredHomework.map((hw) => {
-                const total = hw.totalCount || 30;
-                const submitted = hw.submittedCount || 0;
-                const pct = Math.round((submitted / total) * 100);
-                return (
-                  <tr key={hw.id}>
-                    <td>
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#0F172A', fontSize: '13.5px' }}>{hw.title}</div>
-                        <div style={{ fontSize: '11.5px', color: '#64748B', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {hw.description}
-                        </div>
+              {filteredHomework.length === 0 ? (
+                <tr>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '48px 20px' }}>
+                    <div style={{ maxWidth: '340px', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                      <AlertCircle size={32} color="#94A3B8" />
+                      <div style={{ fontWeight: 700, fontSize: '15px', color: '#0F172A' }}>
+                        No homework assignments found
                       </div>
-                    </td>
-                    <td>
-                      <span className="badge badge-gray">{hw.class}</span>
-                    </td>
-                    <td>
-                      <span className="badge badge-purple">{hw.subject}</span>
-                    </td>
-                    <td style={{ fontSize: '12px', color: '#64748B' }}>{hw.assignedDate}</td>
-                    <td style={{ fontSize: '12px', fontWeight: 600, color: '#EF4444' }}>{hw.dueDate}</td>
-                    <td style={{ fontSize: '13px', color: '#334155' }}>{hw.assignedBy || hw.teacherName || 'Tutor'}</td>
-                    <td style={{ fontWeight: 600 }}>
-                      {hw.submittedCount || 0} / {hw.totalCount || 30}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ width: '60px', height: '6px', backgroundColor: '#E2E8F0', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct >= 80 ? '#10B981' : '#F59E0B' }} />
-                        </div>
-                        <span style={{ fontSize: '12px', fontWeight: 600, color: pct >= 80 ? '#10B981' : '#F59E0B' }}>
-                          {pct}%
-                        </span>
+                      <div style={{ fontSize: '13px', color: '#64748B' }}>
+                        {searchQuery || selectedClass !== 'All Classes'
+                          ? 'No homework assignments match the current filters.'
+                          : 'No coursework assignments have been created yet.'}
                       </div>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button
-                        className="btn btn-secondary"
-                        style={{ padding: '4px 8px', fontSize: '12px' }}
-                        onClick={() => setActiveReviewHw(hw)}
-                      >
-                        <Eye size={13} />
-                        <span style={{ marginLeft: '4px' }}>Submissions</span>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                      {!searchQuery && selectedClass === 'All Classes' && (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => setShowAssignModal(true)}
+                          style={{ marginTop: '8px' }}
+                        >
+                          <Plus size={14} />
+                          <span>Assign First Homework</span>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredHomework.map((hw) => {
+                  const total = hw.totalCount || 0;
+                  const submitted = hw.submittedCount || 0;
+                  const pct = total > 0 ? Math.round((submitted / total) * 100) : 0;
+                  return (
+                    <tr key={hw.id}>
+                      <td>
+                        <div>
+                          <div style={{ fontWeight: 600, color: '#0F172A', fontSize: '13.5px' }}>{hw.title}</div>
+                          <div style={{ fontSize: '11.5px', color: '#64748B', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {hw.description || '—'}
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="badge badge-gray">{hw.class}</span>
+                      </td>
+                      <td>
+                        <span className="badge badge-purple">{hw.subject}</span>
+                      </td>
+                      <td style={{ fontSize: '12px', color: '#64748B' }}>{hw.assignedDate}</td>
+                      <td style={{ fontSize: '12px', fontWeight: 600, color: '#EF4444' }}>{hw.dueDate}</td>
+                      <td style={{ fontSize: '13px', color: '#334155' }}>{hw.assignedBy || hw.teacherName || 'Tutor'}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        {submitted} / {total}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ width: '60px', height: '6px', backgroundColor: '#E2E8F0', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct >= 80 ? '#10B981' : '#F59E0B' }} />
+                          </div>
+                          <span style={{ fontSize: '12px', fontWeight: 600, color: pct >= 80 ? '#10B981' : '#F59E0B' }}>
+                            {pct}%
+                          </span>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '4px 8px', fontSize: '12px' }}
+                          onClick={() => handleOpenReview(hw)}
+                        >
+                          <Eye size={13} />
+                          <span style={{ marginLeft: '4px' }}>Submissions</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -300,31 +321,26 @@ export const HomeworkAdminPage: React.FC = () => {
 
                 <div className="grid-2-col" style={{ gap: '14px' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Target Class & Batch</label>
-                    <select
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Target Class</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Class 10 - A"
                       value={newHw.class}
                       onChange={(e) => setNewHw({ ...newHw, class: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
-                    >
-                      <option>Class 10 - A</option>
-                      <option>Class 10 - B</option>
-                      <option>Class 9 - A</option>
-                      <option>Class 8 - A</option>
-                    </select>
+                    />
                   </div>
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Subject</label>
-                    <select
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Mathematics"
                       value={newHw.subject}
                       onChange={(e) => setNewHw({ ...newHw, subject: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
-                    >
-                      <option>Mathematics</option>
-                      <option>Physics</option>
-                      <option>Chemistry</option>
-                      <option>Biology</option>
-                      <option>English</option>
-                    </select>
+                    />
                   </div>
                 </div>
 
@@ -385,6 +401,7 @@ export const HomeworkAdminPage: React.FC = () => {
                 <span style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Student Turn-Ins ({submissions.length})</span>
                 <button
                   className="btn btn-sm btn-secondary"
+                  disabled={submissions.length === 0}
                   onClick={() => {
                     const data = submissions.map((s) => ({
                       RollNo: s.rollNo,
@@ -416,43 +433,34 @@ export const HomeworkAdminPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {submissions.map((sub) => (
-                      <tr key={sub.id}>
-                        <td>
-                          <div className="user-table-cell">
-                            <img src={sub.avatar} alt={sub.name} className="user-table-avatar" />
-                            <span className="user-table-name">{sub.name}</span>
-                          </div>
-                        </td>
-                        <td>{sub.rollNo}</td>
-                        <td style={{ fontSize: '12px', color: '#64748B' }}>{sub.submittedAt}</td>
-                        <td>
-                          <span className={`badge ${sub.status === 'Graded' ? 'badge-success' : sub.status === 'Submitted' ? 'badge-info' : 'badge-danger'}`}>
-                            {sub.status}
-                          </span>
-                        </td>
-                        <td style={{ fontWeight: 700 }}>{sub.score}</td>
-                        <td>
-                          {sub.status !== 'Missing' ? (
-                            <button
-                              className="btn btn-sm btn-secondary"
-                              onClick={() => {
-                                downloadSampleDocument(
-                                  `Submission_${sub.name.replace(/\s+/g, '_')}_${activeReviewHw.title.replace(/\s+/g, '_')}.txt`,
-                                  `STUDENT HOMEWORK SUBMISSION\nAssignment: ${activeReviewHw.title}\nStudent: ${sub.name}\nRoll: ${sub.rollNo}\nDate: ${sub.submittedAt}\n\n[Answers handwritten attached in submission record]`
-                                );
-                                showToast(`Downloaded submission document for ${sub.name}`, 'success');
-                              }}
-                            >
-                              <Download size={12} />
-                              <span>View Work</span>
-                            </button>
-                          ) : (
-                            <span style={{ fontSize: '11px', color: '#94A3B8' }}>No upload</span>
-                          )}
+                    {submissions.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: '32px', color: '#64748B' }}>
+                          No students enrolled in this class cohort yet.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      submissions.map((sub) => (
+                        <tr key={sub.id}>
+                          <td>
+                            <div className="user-table-cell">
+                              <span className="user-table-name">{sub.name}</span>
+                            </div>
+                          </td>
+                          <td>{sub.rollNo || '—'}</td>
+                          <td style={{ fontSize: '12px', color: '#64748B' }}>{sub.submittedAt}</td>
+                          <td>
+                            <span className="badge badge-info">
+                              {sub.status}
+                            </span>
+                          </td>
+                          <td style={{ fontWeight: 700 }}>{sub.score}</td>
+                          <td>
+                            <span style={{ fontSize: '11px', color: '#94A3B8' }}>No upload</span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>

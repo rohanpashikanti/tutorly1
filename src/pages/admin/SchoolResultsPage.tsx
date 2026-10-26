@@ -12,9 +12,9 @@ import {
   ChevronRight,
   Filter
 } from 'lucide-react';
+import { DonutChart, BarChart } from '../../components/charts/Charts';
 import { useApp } from '../../context/AppContext';
-import { BarChart } from '../../components/charts/Charts';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { getStoredStudents } from '../../utils/storage';
 import { downloadCSV, downloadSampleDocument, triggerPrint } from '../../utils/demoActions';
 
 export const SchoolResultsPage: React.FC = () => {
@@ -25,25 +25,24 @@ export const SchoolResultsPage: React.FC = () => {
   const [activeReportStudent, setActiveReportStudent] = useState<any | null>(null);
 
   // Class performance per subject
-  const subjectPerformanceData = [
-    { label: 'Maths', value: 78, color: '#C7D2FE' },
-    { label: 'Science', value: 82, color: '#C7D2FE' },
-    { label: 'English', value: 76, color: '#C7D2FE' },
-    { label: 'Social', value: 71, color: '#C7D2FE' },
-    { label: 'Telugu', value: 79, color: '#6366F1' },
-  ];
+  const subjectPerformanceData: { label: string; value: number; color: string }[] = [];
 
   // Full marks breakdown
-  const studentResults = [
-    { id: '1', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, maths: 96, science: 92, english: 89, social: 94, telugu: 91, total: 462, pct: 92.4, grade: 'A+', result: 'Passed' },
-    { id: '2', name: 'Bhavana Reddy', rollNo: '002', avatar: MOCK_STUDENTS[2].avatar, maths: 88, science: 85, english: 91, social: 87, telugu: 84, total: 435, pct: 87.0, grade: 'A', result: 'Passed' },
-    { id: '3', name: 'Charan Kumar', rollNo: '003', avatar: MOCK_STUDENTS[3].avatar, maths: 76, science: 82, english: 78, social: 74, telugu: 80, total: 390, pct: 78.0, grade: 'B+', result: 'Passed' },
-    { id: '4', name: 'Divya Nair', rollNo: '004', avatar: MOCK_STUDENTS[4].avatar, maths: 85, science: 79, english: 88, social: 81, telugu: 86, total: 419, pct: 83.8, grade: 'A', result: 'Passed' },
-    { id: '5', name: 'Harshith Reddy', rollNo: '005', avatar: MOCK_STUDENTS[5].avatar, maths: 67, science: 71, english: 69, social: 65, telugu: 72, total: 344, pct: 68.8, grade: 'B', result: 'Passed' },
-    { id: '6', name: 'Kavya Sri', rollNo: '006', avatar: MOCK_STUDENTS[1].avatar, maths: 91, science: 88, english: 86, social: 82, telugu: 89, total: 436, pct: 87.2, grade: 'A', result: 'Passed' },
-    { id: '7', name: 'Manish Verma', rollNo: '007', avatar: MOCK_STUDENTS[6].avatar, maths: 42, science: 55, english: 48, social: 51, telugu: 46, total: 242, pct: 48.4, grade: 'C', result: 'Failed' },
-    { id: '8', name: 'Nithya Sree', rollNo: '008', avatar: MOCK_STUDENTS[7].avatar, maths: 78, science: 84, english: 81, social: 79, telugu: 83, total: 405, pct: 81.0, grade: 'A', result: 'Passed' },
-  ];
+  const studentResults = getStoredStudents().map((s) => ({
+    id: s.id,
+    name: s.name,
+    rollNo: s.rollNo,
+    avatar: s.avatar,
+    maths: 0,
+    science: 0,
+    english: 0,
+    social: 0,
+    telugu: 0,
+    total: 0,
+    pct: 0,
+    grade: '—',
+    result: 'Pending'
+  }));
 
   const handleExportCSV = () => {
     const data = studentResults.map((s) => ({
@@ -282,45 +281,36 @@ export const SchoolResultsPage: React.FC = () => {
               </button>
             </div>
             <div className="card-body" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ textAlign: 'center', borderBottom: '1px solid #E2E8F0', paddingBottom: '10px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A' }}>Sri Sai Tuition Center</div>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#6366F1' }}>Half Yearly Examination</div>
-                <div style={{ fontSize: '11px', color: '#64748B' }}>Report Card (2026 - 2027)</div>
-              </div>
+              {studentResults.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px 0', color: '#94A3B8', fontSize: '13px' }}>
+                  No student report cards available.
+                </div>
+              ) : (
+                <>
+                  <div style={{ textAlign: 'center', borderBottom: '1px solid #E2E8F0', paddingBottom: '10px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A' }}>{selectedExam}</div>
+                    <div style={{ fontSize: '11px', color: '#64748B' }}>Report Card Preview</div>
+                  </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <img src={MOCK_STUDENTS[0].avatar} alt="Aditya" style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover' }} />
-                <div>
-                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>Aditya Sharma</div>
-                  <div style={{ fontSize: '11.5px', color: '#64748B' }}>Class 10 - Section A | Roll: 001</div>
-                </div>
-              </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {studentResults[0].avatar ? (
+                      <img src={studentResults[0].avatar} alt={studentResults[0].name} style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover' }} />
+                    ) : (
+                      <div style={{ width: '38px', height: '38px', borderRadius: '50%', backgroundColor: '#E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#64748B' }}>
+                        {studentResults[0].name.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>{studentResults[0].name}</div>
+                      <div style={{ fontSize: '11.5px', color: '#64748B' }}>Roll: {studentResults[0].rollNo || '—'}</div>
+                    </div>
+                  </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span>Mathematics</span><strong>96/100 (A+)</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span>Science</span><strong>92/100 (A+)</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span>English</span><strong>89/100 (A)</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span>Social Studies</span><strong>94/100 (A+)</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #F1F5F9' }}>
-                  <span>Telugu</span><strong>91/100 (A+)</strong>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: '#ECFDF5', borderRadius: '8px' }}>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#047857', fontWeight: 600 }}>Total: 462 / 500 (92.4%)</div>
-                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#065F46' }}>Result: PASSED</div>
-                </div>
-                <span className="badge badge-success" style={{ fontSize: '13px', padding: '4px 10px' }}>Grade A+</span>
-              </div>
+                  <div style={{ padding: '12px', background: '#F8FAFC', borderRadius: '8px', fontSize: '12.5px', textAlign: 'center', color: '#64748B' }}>
+                    Marks and evaluation will display here once examination scores are recorded.
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ClipboardCheck,
   Calendar,
@@ -9,6 +9,8 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { api } from '../../api/client';
+import { getStoredAttendanceSessions, getStoredStudents } from '../../utils/storage';
 import { downloadCSV } from '../../utils/demoActions';
 
 interface AttendanceRecord {
@@ -18,55 +20,75 @@ interface AttendanceRecord {
   batch: string;
   status: 'Present' | 'Absent' | 'Late' | 'Pending Verification';
   remarks?: string;
-  month: string; // '2026-10' | '2026-09'
+  month: string; // 'YYYY-MM'
 }
 
 export const ParentAttendancePage: React.FC = () => {
-  const { selectedChildId, setSelectedChildId, selectedChild, showToast } = useApp();
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-10');
+  const { selectedChildId, setSelectedChildId, activeInstitutionId, showToast } = useApp();
+  const [children, setChildren] = useState<any[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Present' | 'Absent' | 'Late'>('All');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const isAditya = selectedChildId === 'stu-001';
+  useEffect(() => {
+    api.portals.getParent(activeInstitutionId)
+      .then((res) => {
+        if (res && res.children) {
+          setChildren(res.children);
+          if (res.children.length > 0 && !selectedChildId) {
+            setSelectedChildId(res.children[0].id);
+          }
+        }
+      })
+      .catch((err) => {
+        setLoadError(err.message || 'Failed to load children');
+        const stored = getStoredStudents();
+        setChildren(stored);
+      });
+  }, [activeInstitutionId, selectedChildId, setSelectedChildId]);
 
-  // Real chronological attendance records for Aditya (Class 10)
-  const adityaAttendance: AttendanceRecord[] = [
-    { id: 'att-1', date: '28 Oct 2026', day: 'Tuesday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Full session attended', month: '2026-10' },
-    { id: 'att-2', date: '27 Oct 2026', day: 'Monday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Active in class test', month: '2026-10' },
-    { id: 'att-3', date: '25 Oct 2026', day: 'Saturday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Weekend doubt session', month: '2026-10' },
-    { id: 'att-4', date: '24 Oct 2026', day: 'Friday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'att-5', date: '23 Oct 2026', day: 'Thursday', batch: 'Class 10 - Section A Morning', status: 'Late', remarks: 'Arrived 10 mins late', month: '2026-10' },
-    { id: 'att-6', date: '22 Oct 2026', day: 'Wednesday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'att-7', date: '21 Oct 2026', day: 'Tuesday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'att-8', date: '20 Oct 2026', day: 'Monday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'att-9', date: '18 Oct 2026', day: 'Saturday', batch: 'Class 10 - Section A Morning', status: 'Absent', remarks: 'Parent informed (Fever)', month: '2026-10' },
-    { id: 'att-10', date: '17 Oct 2026', day: 'Friday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'att-11', date: '16 Oct 2026', day: 'Thursday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'att-12', date: '15 Oct 2026', day: 'Wednesday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Monthly test attended', month: '2026-10' },
-    // September
-    { id: 'att-13', date: '30 Sep 2026', day: 'Wednesday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-09' },
-    { id: 'att-14', date: '29 Sep 2026', day: 'Tuesday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Regular session', month: '2026-09' },
-    { id: 'att-15', date: '28 Sep 2026', day: 'Monday', batch: 'Class 10 - Section A Morning', status: 'Present', remarks: 'Revision test', month: '2026-09' },
-    { id: 'att-16', date: '26 Sep 2026', day: 'Saturday', batch: 'Class 10 - Section A Morning', status: 'Late', remarks: 'Traffic delay (8 mins)', month: '2026-09' }
-  ];
+  const activeChild = children.find((c) => c.id === selectedChildId) || children[0] || null;
 
-  // Real chronological attendance records for Kavya (Class 9)
-  const kavyaAttendance: AttendanceRecord[] = [
-    { id: 'katt-1', date: '28 Oct 2026', day: 'Tuesday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'katt-2', date: '27 Oct 2026', day: 'Monday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'katt-3', date: '25 Oct 2026', day: 'Saturday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Science practical session', month: '2026-10' },
-    { id: 'katt-4', date: '24 Oct 2026', day: 'Friday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Monthly test', month: '2026-10' },
-    { id: 'katt-5', date: '23 Oct 2026', day: 'Thursday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'katt-6', date: '22 Oct 2026', day: 'Wednesday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'katt-7', date: '21 Oct 2026', day: 'Tuesday', batch: 'Class 9 - Section B Evening', status: 'Late', remarks: 'Arrived 15 mins late', month: '2026-10' },
-    { id: 'katt-8', date: '20 Oct 2026', day: 'Monday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    { id: 'katt-9', date: '19 Oct 2026', day: 'Sunday', batch: 'Class 9 - Section B Evening', status: 'Absent', remarks: 'Family event', month: '2026-10' },
-    { id: 'katt-10', date: '17 Oct 2026', day: 'Friday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-10' },
-    // September
-    { id: 'katt-11', date: '30 Sep 2026', day: 'Wednesday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-09' },
-    { id: 'katt-12', date: '29 Sep 2026', day: 'Tuesday', batch: 'Class 9 - Section B Evening', status: 'Present', remarks: 'Regular session', month: '2026-09' }
-  ];
+  // Real chronological attendance records for active child
+  const childRecords: AttendanceRecord[] = useMemo(() => {
+    if (!activeChild) return [];
+    const sessions = Object.values(getStoredAttendanceSessions());
+    const records: AttendanceRecord[] = [];
 
-  const childRecords = isAditya ? adityaAttendance : kavyaAttendance;
+    sessions.forEach((s) => {
+      const match = s.records?.find(
+        (r) => r.studentId === activeChild.id || r.studentName === activeChild.name
+      );
+      if (match) {
+        let parsedDay = '—';
+        try {
+          parsedDay = new Date(s.date).toLocaleDateString('en-US', { weekday: 'long' });
+        } catch {
+          // ignore
+        }
+        records.push({
+          id: `${s.savedAt || s.date}-${activeChild.id}`,
+          date: s.date,
+          day: parsedDay,
+          batch: `${s.className} - ${s.batch}`,
+          status: match.status === 'Not Marked' ? 'Pending Verification' : match.status,
+          remarks: match.remarks,
+          month: s.date ? s.date.substring(0, 7) : 'All'
+        });
+      }
+    });
+
+    return records.sort((a, b) => b.date.localeCompare(a.date));
+  }, [activeChild]);
+
+  // Extract available months
+  const availableMonths = useMemo(() => {
+    const set = new Set<string>();
+    childRecords.forEach((r) => {
+      if (r.month && r.month !== 'All') set.add(r.month);
+    });
+    return Array.from(set).sort().reverse();
+  }, [childRecords]);
 
   // Filter records by month and status
   const filteredRecords = childRecords.filter((rec) => {
@@ -81,6 +103,7 @@ export const ParentAttendancePage: React.FC = () => {
   const lateCount = childRecords.filter((r) => (selectedMonth === 'All' || r.month === selectedMonth) && r.status === 'Late').length;
 
   const handleExportCSV = () => {
+    if (!activeChild) return;
     const data = filteredRecords.map((r) => ({
       Date: r.date,
       Day: r.day,
@@ -88,7 +111,7 @@ export const ParentAttendancePage: React.FC = () => {
       Status: r.status,
       Remarks: r.remarks || ''
     }));
-    downloadCSV(`${selectedChild.name.replace(/\s+/g, '_')}_attendance.csv`, data);
+    downloadCSV(`${activeChild.name.replace(/\s+/g, '_')}_attendance.csv`, data);
     showToast(`Exported ${data.length} attendance records to CSV`, 'success');
   };
 
@@ -124,6 +147,7 @@ export const ParentAttendancePage: React.FC = () => {
         <div className="page-header-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button
             className="btn btn-secondary"
+            disabled={!activeChild || filteredRecords.length === 0}
             onClick={handleExportCSV}
             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
@@ -132,6 +156,12 @@ export const ParentAttendancePage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', color: '#991B1B', fontSize: '13px' }}>
+          Unable to refresh portal children from server: {loadError}
+        </div>
+      )}
 
       {/* Child Switcher & Month Selector */}
       <div
@@ -145,51 +175,36 @@ export const ParentAttendancePage: React.FC = () => {
         }}
       >
         {/* Child Selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>Student:</span>
-          <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: '10px', padding: '3px' }}>
-            <button
-              onClick={() => {
-                setSelectedChildId('stu-001');
-                showToast('Viewing Aditya Sharma (Class 10)', 'info');
-              }}
-              style={{
-                border: 'none',
-                background: isAditya ? '#FFFFFF' : 'transparent',
-                color: isAditya ? '#4F46E5' : '#475569',
-                fontWeight: isAditya ? 700 : 500,
-                fontSize: '12.5px',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                boxShadow: isAditya ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              Aditya Sharma (Class 10)
-            </button>
-            <button
-              onClick={() => {
-                setSelectedChildId('stu-002');
-                showToast('Viewing Kavya Sharma (Class 9)', 'info');
-              }}
-              style={{
-                border: 'none',
-                background: !isAditya ? '#FFFFFF' : 'transparent',
-                color: !isAditya ? '#4F46E5' : '#475569',
-                fontWeight: !isAditya ? 700 : 500,
-                fontSize: '12.5px',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                boxShadow: !isAditya ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              Kavya Sharma (Class 9)
-            </button>
+        {children.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>Student:</span>
+            <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: '10px', padding: '3px' }}>
+              {children.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => {
+                    setSelectedChildId(c.id);
+                    showToast(`Viewing ${c.name} (${c.class})`, 'info');
+                  }}
+                  style={{
+                    border: 'none',
+                    background: c.id === activeChild?.id ? '#FFFFFF' : 'transparent',
+                    color: c.id === activeChild?.id ? '#4F46E5' : '#475569',
+                    fontWeight: c.id === activeChild?.id ? 700 : 500,
+                    fontSize: '12.5px',
+                    padding: '6px 14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    boxShadow: c.id === activeChild?.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {c.name} ({c.class})
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Month Selector & Status Filters */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -200,9 +215,10 @@ export const ParentAttendancePage: React.FC = () => {
             style={{ padding: '6px 12px', fontSize: '12.5px' }}
             aria-label="Select month"
           >
-            <option value="2026-10">October 2026</option>
-            <option value="2026-09">September 2026</option>
             <option value="All">All Months</option>
+            {availableMonths.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
           </select>
 
           <select
@@ -220,7 +236,7 @@ export const ParentAttendancePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Simple Attendance Summary Banner */}
+      {/* Attendance Summary Banner */}
       <div
         className="card"
         style={{
@@ -238,7 +254,7 @@ export const ParentAttendancePage: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', color: '#0F172A', fontWeight: 600 }}>
           <Calendar size={16} color="#6366F1" />
           <span>
-            {selectedMonth === '2026-10' ? 'October 2026' : selectedMonth === '2026-09' ? 'September 2026' : 'Overall Period'} Summary:
+            {selectedMonth === 'All' ? 'Overall Period' : selectedMonth} Summary:
           </span>
         </div>
 
@@ -275,7 +291,7 @@ export const ParentAttendancePage: React.FC = () => {
               Attendance History ({filteredRecords.length})
             </h3>
             <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-              Chronological log for {isAditya ? 'Aditya Sharma (Class 10)' : 'Kavya Sharma (Class 9)'}
+              Chronological log for {activeChild ? `${activeChild.name} (${activeChild.class})` : 'Student'}
             </div>
           </div>
         </div>
@@ -288,18 +304,22 @@ export const ParentAttendancePage: React.FC = () => {
                 No attendance records found
               </div>
               <div style={{ fontSize: '13px', color: '#64748B' }}>
-                No records match the selected month or status filter.
+                {!activeChild
+                  ? 'No child is linked to this parent account.'
+                  : 'No attendance records match the selected month or status filter.'}
               </div>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  setSelectedMonth('2026-10');
-                  setStatusFilter('All');
-                }}
-                style={{ marginTop: '8px' }}
-              >
-                Reset Filters
-              </button>
+              {(selectedMonth !== 'All' || statusFilter !== 'All') && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setSelectedMonth('All');
+                    setStatusFilter('All');
+                  }}
+                  style={{ marginTop: '8px' }}
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
           </div>
         ) : (

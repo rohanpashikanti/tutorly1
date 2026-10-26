@@ -90,28 +90,29 @@ feesRouter.get('/:institutionId/fees/records', async (c) => {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const records = raw.results.map((r, idx) => {
-    const totalFees = r.total_charges_paise > 0 ? Math.round(r.total_charges_paise / 100) : 36000;
+    const totalFees = Math.round(r.total_charges_paise / 100);
     const paidAmount = Math.round(r.total_paid_paise / 100);
     const outstanding = Math.max(0, totalFees - paidAmount);
 
     let status: 'Paid' | 'Pending' | 'Overdue' = 'Paid';
     let daysOverdue = 0;
-    const dueDate = r.earliest_due || '2026-11-10';
+    const dueDate = r.earliest_due || '—';
 
     if (outstanding > 0) {
-      if (dueDate < todayStr) {
+      if (r.earliest_due && r.earliest_due < todayStr) {
         status = 'Overdue';
-        const diffMs = new Date().getTime() - new Date(dueDate).getTime();
+        const diffMs = new Date().getTime() - new Date(r.earliest_due).getTime();
         daysOverdue = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
       } else {
         status = 'Pending';
       }
     }
 
-    let mappedMethod: 'UPI' | 'Cash' | 'Card' | 'Bank Transfer' = 'UPI';
+    let mappedMethod: 'UPI' | 'Cash' | 'Card' | 'Bank Transfer' | undefined;
     if (r.last_method === 'cash') mappedMethod = 'Cash';
     else if (r.last_method === 'card') mappedMethod = 'Card';
     else if (r.last_method === 'bank_transfer') mappedMethod = 'Bank Transfer';
+    else if (r.last_method === 'upi') mappedMethod = 'UPI';
 
     return {
       id: `fee-rec-${r.student_id}`,
@@ -128,10 +129,10 @@ feesRouter.get('/:institutionId/fees/records', async (c) => {
       dueDate,
       daysOverdue,
       paymentMethod: mappedMethod,
-      paymentDate: r.last_payment_date ? r.last_payment_date.slice(0, 10) : '2026-10-18',
-      transactionId: r.last_receipt_no ? `TXN-${r.last_receipt_no.slice(-6)}` : `TXN-89472${idx}`,
+      paymentDate: r.last_payment_date ? r.last_payment_date.slice(0, 10) : undefined,
+      transactionId: r.last_receipt_no ? `TXN-${r.last_receipt_no.slice(-6)}` : undefined,
       status,
-      receiptNo: r.last_receipt_no || `REC-2026-${1000 + idx}`,
+      receiptNo: r.last_receipt_no || undefined,
     };
   });
 
@@ -342,7 +343,7 @@ feesRouter.get('/:institutionId/fees/reports', async (c) => {
     totalBilled,
     totalCollected,
     totalOutstanding,
-    collectionRate: totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 100) : 95,
+    collectionRate: totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 100) : 0,
     monthlyCollections,
   });
 });

@@ -15,8 +15,7 @@ import {
   Search
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { TuitionTest } from '../../types';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { TuitionTest, Student } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
 import { api } from '../../api/client';
@@ -24,7 +23,8 @@ import {
   getStoredTuitionTests,
   saveStoredTuitionTests,
   getStoredTuitionTestMarks,
-  saveStoredTuitionTestMarks
+  saveStoredTuitionTestMarks,
+  getStoredStudents
 } from '../../utils/storage';
 
 interface StudentMarkEntry {
@@ -37,24 +37,13 @@ interface StudentMarkEntry {
   remarks: string;
 }
 
-const DEFAULT_STUDENTS: StudentMarkEntry[] = [
-  { id: 'stu-001', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, marks: 48, maxMarks: 50, remarks: 'Excellent concept clarity' },
-  { id: 'stu-003', name: 'Bhavana Reddy', rollNo: '003', avatar: MOCK_STUDENTS[2].avatar, marks: 44, maxMarks: 50, remarks: 'Very good execution' },
-  { id: 'stu-004', name: 'Charan Kumar', rollNo: '004', avatar: MOCK_STUDENTS[3].avatar, marks: 36, maxMarks: 50, remarks: 'Steady improvement' },
-  { id: 'stu-005', name: 'Divya Nair', rollNo: '005', avatar: MOCK_STUDENTS[4].avatar, marks: 42, maxMarks: 50, remarks: 'Well solved equations' },
-  { id: 'stu-006', name: 'Harshith Reddy', rollNo: '006', avatar: MOCK_STUDENTS[5].avatar, marks: 33, maxMarks: 50, remarks: 'Practice formula sheets' },
-  { id: 'stu-002', name: 'Kavya Sri', rollNo: '002', avatar: MOCK_STUDENTS[1].avatar, marks: 45, maxMarks: 50, remarks: 'Great precision' },
-  { id: 'stu-007', name: 'Manish Verma', rollNo: '007', avatar: MOCK_STUDENTS[6].avatar, marks: 21, maxMarks: 50, remarks: 'Needs remedial session' },
-  { id: 'stu-008', name: 'Nithya Sree', rollNo: '008', avatar: MOCK_STUDENTS[7].avatar, marks: 39, maxMarks: 50, remarks: 'Good work' },
-];
-
 export const TuitionTestsPage: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
   const [activeTab, setActiveTab] = useState<'Enter Marks' | 'View Results' | 'Tests Schedule'>('Enter Marks');
 
   // Stored tests & marks
   const [tests, setTests] = useState<TuitionTest[]>(() => getStoredTuitionTests());
-  const [selectedTestId, setSelectedTestId] = useState<string>(() => tests[0]?.id || 'tt-1');
+  const [selectedTestId, setSelectedTestId] = useState<string>(() => tests[0]?.id || '');
   const [selectedBatch, setSelectedBatch] = useState('Batch A (Class 10)');
   const [selectedSubject, setSelectedSubject] = useState('Physics');
   const [maxMarks, setMaxMarks] = useState<number>(50);
@@ -62,9 +51,10 @@ export const TuitionTestsPage: React.FC = () => {
   const [searchFilter, setSearchFilter] = useState('');
   const [isSaved, setIsSaved] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Student marks state
-  const [studentMarks, setStudentMarks] = useState<StudentMarkEntry[]>(DEFAULT_STUDENTS);
+  const [studentMarks, setStudentMarks] = useState<StudentMarkEntry[]>([]);
 
   // Modal for new tuition test
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -81,30 +71,42 @@ export const TuitionTestsPage: React.FC = () => {
 
   // Load tests from API
   const refreshTests = async () => {
+    if (!activeInstitutionId) return;
     try {
       const res = await api.assessments.listTests(activeInstitutionId);
-      if (res && res.tests && res.tests.length > 0) {
-        setTests(res.tests);
-        saveStoredTuitionTests(res.tests);
-        if (!res.tests.some(t => t.id === selectedTestId)) {
-          setSelectedTestId(res.tests[0].id);
-          setMaxMarks(res.tests[0].maxMarks);
+      const list = res.tests || [];
+      setTests(list);
+      saveStoredTuitionTests(list);
+      setLoadError(null);
+      if (list.length > 0) {
+        if (!list.some(t => t.id === selectedTestId)) {
+          setSelectedTestId(list[0].id);
+          setMaxMarks(list[0].maxMarks);
         }
+      } else {
+        setSelectedTestId('');
       }
-    } catch {
-      // Keep existing cached state
+    } catch (err: any) {
+      console.error('Failed to load tuition tests:', err);
+      setTests([]);
+      setSelectedTestId('');
+      setLoadError(err?.message || 'Failed to load tuition tests from database');
     }
   };
 
   useEffect(() => {
-    refreshTests();
+    void refreshTests();
   }, [activeInstitutionId]);
 
   // Load marks from API on test / batch / subject change
   useEffect(() => {
     let isCancelled = false;
     const fetchMarks = async () => {
-      if (!selectedTestId) return;
+      if (!selectedTestId) {
+        setStudentMarks([]);
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       try {
         const res = await api.assessments.getMarks(activeInstitutionId, selectedTestId);
@@ -132,20 +134,30 @@ export const TuitionTestsPage: React.FC = () => {
 
       if (!isCancelled) {
         if (savedForSession && savedForSession.length > 0) {
-          setStudentMarks(prev => prev.map(s => {
-            const found = savedForSession.find(m => m.studentId === s.id);
-            if (found) {
-              return {
-                ...s,
-                marks: found.marks,
-                maxMarks: found.maxMarks || maxMarks,
-                remarks: found.remarks || s.remarks
-              };
-            }
-            return s;
+          const mapped: StudentMarkEntry[] = savedForSession.map(m => ({
+            id: m.studentId,
+            name: m.studentName || 'Student',
+            rollNo: m.rollNo || '',
+            avatar: '',
+            marks: m.marks,
+            maxMarks: m.maxMarks || maxMarks,
+            remarks: m.remarks || ''
           }));
+          setStudentMarks(mapped);
           setIsSaved(true);
         } else {
+          // Initialize blank marks from enrolled students
+          const enrolled = getStoredStudents();
+          const blankMarks: StudentMarkEntry[] = enrolled.map(st => ({
+            id: st.id,
+            name: st.name,
+            rollNo: st.rollNo,
+            avatar: st.avatar,
+            marks: '',
+            maxMarks,
+            remarks: ''
+          }));
+          setStudentMarks(blankMarks);
           setIsSaved(false);
         }
         setIsLoading(false);
@@ -351,6 +363,13 @@ export const TuitionTestsPage: React.FC = () => {
         </div>
       </div>
 
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: '#B91C1C', fontSize: '13.5px' }}>{loadError}</span>
+          <button className="btn btn-secondary btn-sm" onClick={() => { setLoadError(null); void refreshTests(); }}>Retry</button>
+        </div>
+      )}
+
       {/* Primary Selector Bar (Consolidated test, batch, subject, date & marks) */}
       <div className="filter-bar" style={{ marginBottom: '20px' }}>
         <div className="filter-controls">
@@ -537,77 +556,90 @@ export const TuitionTestsPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {studentMarks.map((st, idx) => {
-                  const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-                  const isExceeded = typeof st.marks === 'number' && (st.marks > maxMarks || st.marks < 0);
-                  const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : '—';
-                  const grade = calculateGrade(st.marks, maxMarks);
+                {studentMarks.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      {tests.length === 0 ? 'No tuition tests scheduled. Create a test to begin recording marks.' : 'No enrolled students found in this batch/class.'}
+                    </td>
+                  </tr>
+                ) : (
+                  studentMarks.map((st, idx) => {
+                    const numMarks = typeof st.marks === 'number' ? st.marks : 0;
+                    const isExceeded = typeof st.marks === 'number' && (st.marks > maxMarks || st.marks < 0);
+                    const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : '—';
+                    const grade = calculateGrade(st.marks, maxMarks);
 
-                  return (
-                    <tr key={st.id}>
-                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                      <td>
-                        <div className="user-table-cell">
-                          <img src={st.avatar} alt={st.name} className="user-table-avatar" />
-                          <span className="user-table-name">{st.name}</span>
-                        </div>
-                      </td>
-                      <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <input
-                            type="number"
-                            min="0"
-                            max={maxMarks}
-                            value={st.marks}
-                            onChange={(e) => handleMarkChange(st.id, e.target.value)}
-                            placeholder="0"
-                            style={{
-                              width: '76px',
-                              padding: '6px 10px',
-                              borderRadius: '6px',
-                              border: isExceeded ? '2px solid #EF4444' : '1px solid #CBD5E1',
-                              background: isExceeded ? '#FEF2F2' : '#FFFFFF',
-                              fontWeight: 700,
-                              fontSize: '13px',
-                              textAlign: 'center'
-                            }}
-                          />
-                          <span style={{ fontSize: '12px', color: '#94A3B8' }}>/ {maxMarks}</span>
-                        </div>
-                        {isExceeded && (
-                          <div style={{ fontSize: '10.5px', color: '#EF4444', fontWeight: 600, marginTop: '2px' }}>
-                            Must be 0 - {maxMarks}
+                    return (
+                      <tr key={st.id}>
+                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                        <td>
+                          <div className="user-table-cell">
+                            <img src={st.avatar} alt={st.name} className="user-table-avatar" />
+                            <span className="user-table-name">{st.name}</span>
                           </div>
-                        )}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#0F172A' }}>
-                        {pct !== '—' ? `${pct}%` : '—'}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span className={`badge ${grade === 'A+' || grade === 'A' ? 'badge-success' : grade === 'B+' || grade === 'B' ? 'badge-info' : 'badge-warning'}`}>
-                          {grade}
-                        </span>
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={st.remarks}
-                          onChange={(e) => handleRemarksChange(st.id, e.target.value)}
-                          placeholder="Feedback on test..."
-                          style={{ width: '100%', maxWidth: '240px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '12px' }}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <input
+                              type="number"
+                              min="0"
+                              max={maxMarks}
+                              value={st.marks}
+                              onChange={(e) => handleMarkChange(st.id, e.target.value)}
+                              placeholder="0"
+                              style={{
+                                width: '76px',
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                border: isExceeded ? '2px solid #EF4444' : '1px solid #CBD5E1',
+                                background: isExceeded ? '#FEF2F2' : '#FFFFFF',
+                                fontWeight: 700,
+                                fontSize: '13px',
+                                textAlign: 'center'
+                              }}
+                            />
+                            <span style={{ fontSize: '12px', color: '#94A3B8' }}>/ {maxMarks}</span>
+                          </div>
+                          {isExceeded && (
+                            <div style={{ fontSize: '10.5px', color: '#EF4444', fontWeight: 600, marginTop: '2px' }}>
+                              Must be 0 - {maxMarks}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#0F172A' }}>
+                          {pct !== '—' ? `${pct}%` : '—'}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span className={`badge ${grade === 'A+' || grade === 'A' ? 'badge-success' : grade === 'B+' || grade === 'B' ? 'badge-info' : 'badge-warning'}`}>
+                            {grade}
+                          </span>
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            value={st.remarks}
+                            onChange={(e) => handleRemarksChange(st.id, e.target.value)}
+                            placeholder="Feedback on test..."
+                            style={{ width: '100%', maxWidth: '240px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '12px' }}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Mobile-Optimized Marks Entry Cards */}
           <div className="data-cards-mobile">
-            {studentMarks.map((st) => {
+            {studentMarks.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '30px', color: '#64748B', background: '#F8FAFC', borderRadius: '8px' }}>
+                {tests.length === 0 ? 'No tuition tests scheduled.' : 'No enrolled students found in this batch/class.'}
+              </div>
+            ) : (
+              studentMarks.map((st) => {
               const numMarks = typeof st.marks === 'number' ? st.marks : 0;
               const isExceeded = typeof st.marks === 'number' && (st.marks > maxMarks || st.marks < 0);
               const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : '—';
@@ -672,7 +704,7 @@ export const TuitionTestsPage: React.FC = () => {
                   />
                 </div>
               );
-            })}
+            }))}
           </div>
 
           <div style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -731,128 +763,142 @@ export const TuitionTestsPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {[...studentMarks]
-                  .filter(s => s.name.toLowerCase().includes(searchFilter.toLowerCase()) || s.rollNo.includes(searchFilter))
-                  .sort((a, b) => {
-                    const numA = typeof a.marks === 'number' ? a.marks : -1;
-                    const numB = typeof b.marks === 'number' ? b.marks : -1;
-                    return numB - numA;
-                  })
-                  .map((st, idx) => {
-                    const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-                    const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : 0;
-                    const isPassed = pct >= 40;
-                    const grade = calculateGrade(st.marks, maxMarks);
+                {studentMarks.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No test results found for this test and batch.
+                    </td>
+                  </tr>
+                ) : (
+                  [...studentMarks]
+                    .filter(s => s.name.toLowerCase().includes(searchFilter.toLowerCase()) || s.rollNo.includes(searchFilter))
+                    .sort((a, b) => {
+                      const numA = typeof a.marks === 'number' ? a.marks : -1;
+                      const numB = typeof b.marks === 'number' ? b.marks : -1;
+                      return numB - numA;
+                    })
+                    .map((st, idx) => {
+                      const numMarks = typeof st.marks === 'number' ? st.marks : 0;
+                      const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : 0;
+                      const isPassed = pct >= 40;
+                      const grade = calculateGrade(st.marks, maxMarks);
 
-                    return (
-                      <tr key={st.id}>
-                        <td style={{ textAlign: 'center', fontWeight: 800, color: idx < 3 ? '#4F46E5' : '#64748B' }}>
-                          #{idx + 1}
-                        </td>
-                        <td>
-                          <div className="user-table-cell">
-                            <img src={st.avatar} alt={st.name} className="user-table-avatar" />
-                            <span className="user-table-name">{st.name}</span>
-                          </div>
-                        </td>
-                        <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
-                        <td style={{ fontWeight: 600, color: '#334155' }}>{selectedSubject}</td>
-                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#0F172A' }}>
-                          {st.marks} / {maxMarks}
-                        </td>
-                        <td style={{ textAlign: 'center', fontWeight: 700 }}>
-                          {pct}%
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <span className={`badge ${grade === 'A+' || grade === 'A' ? 'badge-success' : 'badge-info'}`}>
-                            {grade}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <span className={`badge ${isPassed ? 'badge-success' : 'badge-danger'}`}>
-                            {isPassed ? 'Passed' : 'Needs Support'}
-                          </span>
-                        </td>
-                        <td style={{ color: '#64748B', fontSize: '12px' }}>
-                          {st.remarks || 'Standard evaluation recorded'}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      return (
+                        <tr key={st.id}>
+                          <td style={{ textAlign: 'center', fontWeight: 800, color: idx < 3 ? '#4F46E5' : '#64748B' }}>
+                            #{idx + 1}
+                          </td>
+                          <td>
+                            <div className="user-table-cell">
+                              <img src={st.avatar} alt={st.name} className="user-table-avatar" />
+                              <span className="user-table-name">{st.name}</span>
+                            </div>
+                          </td>
+                          <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
+                          <td style={{ fontWeight: 600, color: '#334155' }}>{selectedSubject}</td>
+                          <td style={{ textAlign: 'center', fontWeight: 700, color: '#0F172A' }}>
+                            {st.marks} / {maxMarks}
+                          </td>
+                          <td style={{ textAlign: 'center', fontWeight: 700 }}>
+                            {pct}%
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <span className={`badge ${grade === 'A+' || grade === 'A' ? 'badge-success' : 'badge-info'}`}>
+                              {grade}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <span className={`badge ${isPassed ? 'badge-success' : 'badge-danger'}`}>
+                              {isPassed ? 'Passed' : 'Needs Support'}
+                            </span>
+                          </td>
+                          <td style={{ color: '#64748B', fontSize: '12px' }}>
+                            {st.remarks || 'Standard evaluation recorded'}
+                          </td>
+                        </tr>
+                      );
+                    })
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Mobile Results Cards */}
           <div className="data-cards-mobile">
-            {[...studentMarks]
-              .filter(s => s.name.toLowerCase().includes(searchFilter.toLowerCase()) || s.rollNo.includes(searchFilter))
-              .sort((a, b) => {
-                const numA = typeof a.marks === 'number' ? a.marks : -1;
-                const numB = typeof b.marks === 'number' ? b.marks : -1;
-                return numB - numA;
-              })
-              .map((st, idx) => {
-                const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-                const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : 0;
-                const isPassed = pct >= 40;
-                const grade = calculateGrade(st.marks, maxMarks);
+            {studentMarks.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '30px', color: '#64748B', background: '#F8FAFC', borderRadius: '8px' }}>
+                No test results found for this test and batch.
+              </div>
+            ) : (
+              [...studentMarks]
+                .filter(s => s.name.toLowerCase().includes(searchFilter.toLowerCase()) || s.rollNo.includes(searchFilter))
+                .sort((a, b) => {
+                  const numA = typeof a.marks === 'number' ? a.marks : -1;
+                  const numB = typeof b.marks === 'number' ? b.marks : -1;
+                  return numB - numA;
+                })
+                .map((st, idx) => {
+                  const numMarks = typeof st.marks === 'number' ? st.marks : 0;
+                  const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : 0;
+                  const isPassed = pct >= 40;
+                  const grade = calculateGrade(st.marks, maxMarks);
 
-                return (
-                  <div key={st.id} className="responsive-data-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span
-                          style={{
-                            fontWeight: 800,
-                            fontSize: '12px',
-                            color: idx < 3 ? '#4F46E5' : '#64748B',
-                            backgroundColor: idx < 3 ? '#EEF2FF' : '#F1F5F9',
-                            padding: '3px 8px',
-                            borderRadius: '6px'
-                          }}
-                        >
-                          Rank #{idx + 1}
+                  return (
+                    <div key={st.id} className="responsive-data-card">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span
+                            style={{
+                              fontWeight: 800,
+                              fontSize: '12px',
+                              color: idx < 3 ? '#4F46E5' : '#64748B',
+                              backgroundColor: idx < 3 ? '#EEF2FF' : '#F1F5F9',
+                              padding: '3px 8px',
+                              borderRadius: '6px'
+                            }}
+                          >
+                            Rank #{idx + 1}
+                          </span>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: '14px', color: '#0F172A' }}>{st.name}</div>
+                            <div style={{ fontSize: '11.5px', color: '#64748B' }}>Roll #{st.rollNo}</div>
+                          </div>
+                        </div>
+                        <span className={`badge ${isPassed ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '11px', padding: '2px 8px' }}>
+                          {isPassed ? 'Passed' : 'Needs Support'}
                         </span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', background: '#F8FAFC', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
                         <div>
-                          <div style={{ fontWeight: 700, fontSize: '14px', color: '#0F172A' }}>{st.name}</div>
-                          <div style={{ fontSize: '11.5px', color: '#64748B' }}>Roll #{st.rollNo}</div>
+                          <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Score</div>
+                          <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
+                            {st.marks} / {maxMarks}
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Percentage</div>
+                          <div style={{ fontSize: '14px', fontWeight: 800, color: '#4F46E5', marginTop: '2px' }}>
+                            {pct}%
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Grade</div>
+                          <div style={{ fontSize: '14px', fontWeight: 800, color: '#16A34A', marginTop: '2px' }}>
+                            {grade}
+                          </div>
                         </div>
                       </div>
-                      <span className={`badge ${isPassed ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '11px', padding: '2px 8px' }}>
-                        {isPassed ? 'Passed' : 'Needs Support'}
-                      </span>
-                    </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', background: '#F8FAFC', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
-                      <div>
-                        <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Score</div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
-                          {st.marks} / {maxMarks}
+                      {st.remarks && (
+                        <div style={{ fontSize: '12px', color: '#475569', fontStyle: 'italic', borderTop: '1px solid #F1F5F9', paddingTop: '6px' }}>
+                          "{st.remarks}"
                         </div>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Percentage</div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#4F46E5', marginTop: '2px' }}>
-                          {pct}%
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Grade</div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#16A34A', marginTop: '2px' }}>
-                          {grade}
-                        </div>
-                      </div>
+                      )}
                     </div>
-
-                    {st.remarks && (
-                      <div style={{ fontSize: '12px', color: '#475569', fontStyle: 'italic', borderTop: '1px solid #F1F5F9', paddingTop: '6px' }}>
-                        "{st.remarks}"
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })
+            )}
           </div>
         </div>
       )}
@@ -883,45 +929,53 @@ export const TuitionTestsPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {tests.map((t) => (
-                  <tr key={t.id}>
-                    <td style={{ fontWeight: 700, color: '#0F172A' }}>{t.name}</td>
-                    <td><span className="badge badge-purple">{t.type}</span></td>
-                    <td style={{ color: '#64748B' }}>{t.class} {t.batch ? `• ${t.batch}` : ''}</td>
-                    <td style={{ fontWeight: 600, color: '#334155' }}>{t.subject}</td>
-                    <td>{t.dateTime}</td>
-                    <td style={{ fontWeight: 700 }}>{t.maxMarks}</td>
-                    <td>
-                      <span className={`badge ${t.status === 'Completed' ? 'badge-success' : t.status === 'Ongoing' ? 'badge-warning' : 'badge-info'}`}>
-                        {t.status}
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
-                        <button
-                          className="btn btn-secondary btn-icon"
-                          style={{ width: '28px', height: '28px', padding: 0 }}
-                          onClick={() => {
-                            setSelectedTestId(t.id);
-                            setMaxMarks(t.maxMarks);
-                            setActiveTab('Enter Marks');
-                          }}
-                          title="Enter Marks"
-                        >
-                          <Edit2 size={13} color="#4F46E5" />
-                        </button>
-                        <button
-                          className="btn btn-secondary btn-icon"
-                          style={{ width: '28px', height: '28px', padding: 0 }}
-                          onClick={() => handleDeleteTest(t.id, t.name)}
-                          title="Delete Test"
-                        >
-                          <Trash2 size={13} color="#EF4444" />
-                        </button>
-                      </div>
+                {tests.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No tuition tests scheduled yet. Click "Create Test" to add one.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  tests.map((t) => (
+                    <tr key={t.id}>
+                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{t.name}</td>
+                      <td><span className="badge badge-purple">{t.type}</span></td>
+                      <td style={{ color: '#64748B' }}>{t.class} {t.batch ? `• ${t.batch}` : ''}</td>
+                      <td style={{ fontWeight: 600, color: '#334155' }}>{t.subject}</td>
+                      <td>{t.dateTime}</td>
+                      <td style={{ fontWeight: 700 }}>{t.maxMarks}</td>
+                      <td>
+                        <span className={`badge ${t.status === 'Completed' ? 'badge-success' : t.status === 'Ongoing' ? 'badge-warning' : 'badge-info'}`}>
+                          {t.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
+                          <button
+                            className="btn btn-secondary btn-icon"
+                            style={{ width: '28px', height: '28px', padding: 0 }}
+                            onClick={() => {
+                              setSelectedTestId(t.id);
+                              setMaxMarks(t.maxMarks);
+                              setActiveTab('Enter Marks');
+                            }}
+                            title="Enter Marks"
+                          >
+                            <Edit2 size={13} color="#4F46E5" />
+                          </button>
+                          <button
+                            className="btn btn-secondary btn-icon"
+                            style={{ width: '28px', height: '28px', padding: 0 }}
+                            onClick={() => handleDeleteTest(t.id, t.name)}
+                            title="Delete Test"
+                          >
+                            <Trash2 size={13} color="#EF4444" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

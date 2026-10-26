@@ -40,6 +40,8 @@ export const StudentFeesPage: React.FC = () => {
   });
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   // Sync state with storage
   const updateRecordsAndPersist = (updated: FeeRecord[]) => {
     setFeeRecords(updated);
@@ -47,22 +49,24 @@ export const StudentFeesPage: React.FC = () => {
   };
 
   const refreshFees = async () => {
+    if (!activeInstitutionId) return;
     setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await api.fees.getRecords(activeInstitutionId);
-      if (res && res.records && res.records.length > 0) {
-        setFeeRecords(res.records);
-        saveStoredStudentFees(res.records);
-      }
-    } catch {
-      // Keep cached state
+      const list = res.records || [];
+      setFeeRecords(list);
+      saveStoredStudentFees(list);
+    } catch (err) {
+      console.error('Failed to load student fees:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load fee records');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    refreshFees();
+    void refreshFees();
   }, [activeInstitutionId]);
 
   // Filtered fee records
@@ -248,6 +252,14 @@ export const StudentFeesPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void refreshFees()}>Retry</button>
+        </div>
+      )}
 
       {/* 4 Stat Overview Cards */}
       <div className="stat-grid-4" style={{ marginBottom: '20px' }}>

@@ -1,28 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   CreditCard,
   Plus,
   Search,
-  Filter,
   Download,
-  CheckCircle2,
   AlertCircle,
   Clock,
   X,
   FileText,
   DollarSign,
   TrendingUp,
-  ChevronRight
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_FEE_RECORDS, MOCK_STUDENTS } from '../../data/mockData';
-import { FeeRecord } from '../../types';
+import { FeeRecord, Student } from '../../types';
 import { DonutChart } from '../../components/charts/Charts';
-import { downloadCSV, downloadSampleDocument } from '../../utils/demoActions';
+import { downloadCSV } from '../../utils/demoActions';
+import { api } from '../../api/client';
+import {
+  getStoredStudentFees,
+  saveStoredStudentFees,
+  getStoredStudents,
+  saveStoredStudents
+} from '../../utils/storage';
 
 export const FeeCollectionPage: React.FC = () => {
-  const { showToast, navigateTo } = useApp();
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(MOCK_FEE_RECORDS);
+  const { showToast, navigateTo, activeInstitutionId } = useApp();
+  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(() => getStoredStudentFees());
+  const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState('All Classes');
   const [selectedStatus, setSelectedStatus] = useState('All Payments');
@@ -30,14 +36,46 @@ export const FeeCollectionPage: React.FC = () => {
 
   // Collect Fee form state
   const [collectForm, setCollectForm] = useState({
-    studentId: 'stu-001',
+    studentId: '',
     feePlan: 'Tuition Monthly Fee',
     amount: 3000,
     paymentMethod: 'UPI' as 'UPI' | 'Cash' | 'Card' | 'Bank Transfer',
     transactionId: '',
-    paymentDate: '2026-10-20',
+    paymentDate: new Date().toISOString().split('T')[0],
     remarks: '',
   });
+
+  const loadFees = useCallback(async () => {
+    if (!activeInstitutionId) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const [feeRes, stuRes] = await Promise.all([
+        api.fees.getRecords(activeInstitutionId),
+        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 }))
+      ]);
+      const records = feeRes.records || [];
+      setFeeRecords(records);
+      saveStoredStudentFees(records);
+
+      if (stuRes && stuRes.students) {
+        setStudents(stuRes.students);
+        saveStoredStudents(stuRes.students);
+        if (stuRes.students.length > 0 && !collectForm.studentId) {
+          setCollectForm((prev) => ({ ...prev, studentId: stuRes.students[0].id }));
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching fees:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load fee records');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeInstitutionId, collectForm.studentId]);
+
+  useEffect(() => {
+    void loadFees();
+  }, [loadFees]);
 
   const handleExportCSV = () => {
     const data = filteredRecords.map((r) => ({
@@ -58,34 +96,34 @@ export const FeeCollectionPage: React.FC = () => {
     showToast(`Exported ${data.length} fee records to CSV`, 'success');
   };
 
-  const handleRecordPayment = (e: React.FormEvent) => {
+  const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const student = MOCK_STUDENTS.find((s) => s.id === collectForm.studentId) || MOCK_STUDENTS[0];
-    const newRecord: FeeRecord = {
-      id: `fee-${Date.now()}`,
-      studentId: student.id,
-      studentName: student.name,
-      avatar: student.avatar,
-      class: `${student.class} - ${student.batch.replace('Batch ', '')}`,
-      feePlan: collectForm.feePlan,
-      totalFees: collectForm.amount,
-      paidAmount: collectForm.amount,
-      outstandingAmount: 0,
-      dueDate: collectForm.paymentDate,
-      daysOverdue: 0,
-      paymentMethod: collectForm.paymentMethod,
-      paymentDate: collectForm.paymentDate,
-      transactionId: collectForm.transactionId || `TXN${Date.now().toString().slice(-6)}`,
-      status: 'Paid',
-      receiptNo: `RCPT${Date.now().toString().slice(-8)}`,
-    };
+    const student = students.find((s) => s.id === collectForm.studentId);
+    if (!student && students.length > 0) {
+      showToast('Please select a student', 'error');
+      return;
+    }
 
-    setFeeRecords([newRecord, ...feeRecords]);
-    setShowCollectModal(false);
-    showToast(
-      `Payment of ₹${collectForm.amount} recorded for ${student.name} via ${collectForm.paymentMethod}. (Recorded offline)`,
-      'success'
-    );
+    try {
+      if (activeInstitutionId && student) {
+        await api.fees.recordPayment(activeInstitutionId, {
+          studentId: student.id,
+          amount: collectForm.amount,
+          method: collectForm.paymentMethod,
+          notes: collectForm.remarks || undefined,
+        });
+        showToast(
+          `Payment of ₹${collectForm.amount} recorded for ${student.name} via ${collectForm.paymentMethod}.`,
+          'success'
+        );
+        setShowCollectModal(false);
+        await loadFees();
+      } else {
+        setShowCollectModal(false);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to record payment', 'error');
+    }
   };
 
   const filteredRecords = feeRecords.filter((rec) => {
@@ -93,6 +131,32 @@ export const FeeCollectionPage: React.FC = () => {
     const matchesClass = selectedClass === 'All Classes' || rec.class.includes(selectedClass);
     const matchesStatus = selectedStatus === 'All Payments' || rec.status === selectedStatus;
     return matchesSearch && matchesClass && matchesStatus;
+  });
+
+  // Dynamic calculations from real records
+  const totalCollected = feeRecords
+    .filter((r) => r.status === 'Paid')
+    .reduce((acc, r) => acc + (r.paidAmount || r.totalFees || 0), 0);
+
+  const pendingAmount = feeRecords
+    .filter((r) => r.status === 'Pending')
+    .reduce((acc, r) => acc + (r.outstandingAmount ?? (r.totalFees - (r.paidAmount || 0))), 0);
+
+  const overdueAmount = feeRecords
+    .filter((r) => r.status === 'Overdue')
+    .reduce((acc, r) => acc + (r.outstandingAmount ?? (r.totalFees - (r.paidAmount || 0))), 0);
+
+  const pendingCount = feeRecords.filter((r) => r.status === 'Pending').length;
+  const overdueCount = feeRecords.filter((r) => r.status === 'Overdue').length;
+  const totalBilled = totalCollected + pendingAmount + overdueAmount;
+  const collectionRate = totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 1000) / 10 : 0;
+
+  // Real method breakdown
+  const paidRecords = feeRecords.filter((r) => r.status === 'Paid' && r.paymentMethod);
+  const methodCounts: Record<string, number> = {};
+  paidRecords.forEach((r) => {
+    const m = r.paymentMethod || 'Other';
+    methodCounts[m] = (methodCounts[m] || 0) + 1;
   });
 
   return (
@@ -119,6 +183,14 @@ export const FeeCollectionPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadFees()}>Retry</button>
+        </div>
+      )}
 
       {/* Selectors Bar */}
       <div className="filter-bar">
@@ -164,8 +236,8 @@ export const FeeCollectionPage: React.FC = () => {
           <div className="stat-icon green"><DollarSign size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Total Collected</div>
-            <div className="stat-value">₹1,98,500</div>
-            <div className="stat-footer"><span className="stat-badge-change positive">↑ +12%</span><span className="stat-subtext">vs last month</span></div>
+            <div className="stat-value">{isLoading ? '—' : `₹${totalCollected.toLocaleString('en-IN')}`}</div>
+            <div className="stat-footer"><span className="stat-subtext">Realized collections</span></div>
           </div>
         </div>
 
@@ -173,8 +245,8 @@ export const FeeCollectionPage: React.FC = () => {
           <div className="stat-icon orange"><Clock size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Pending Amount</div>
-            <div className="stat-value">₹41,500</div>
-            <div className="stat-footer"><span className="stat-subtext">24 students</span></div>
+            <div className="stat-value">{isLoading ? '—' : `₹${pendingAmount.toLocaleString('en-IN')}`}</div>
+            <div className="stat-footer"><span className="stat-subtext">{pendingCount} student{pendingCount === 1 ? '' : 's'}</span></div>
           </div>
         </div>
 
@@ -182,8 +254,8 @@ export const FeeCollectionPage: React.FC = () => {
           <div className="stat-icon red"><AlertCircle size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Overdue Amount</div>
-            <div className="stat-value">₹12,000</div>
-            <div className="stat-footer"><span className="stat-subtext">8 students</span></div>
+            <div className="stat-value">{isLoading ? '—' : `₹${overdueAmount.toLocaleString('en-IN')}`}</div>
+            <div className="stat-footer"><span className="stat-subtext">{overdueCount} student{overdueCount === 1 ? '' : 's'}</span></div>
           </div>
         </div>
 
@@ -191,8 +263,8 @@ export const FeeCollectionPage: React.FC = () => {
           <div className="stat-icon purple"><TrendingUp size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Collection Rate</div>
-            <div className="stat-value">82.7%</div>
-            <div className="stat-footer"><span className="stat-badge-change positive">↑ +5%</span><span className="stat-subtext">This month</span></div>
+            <div className="stat-value">{isLoading ? '—' : `${collectionRate}%`}</div>
+            <div className="stat-footer"><span className="stat-subtext">Of billed tuition</span></div>
           </div>
         </div>
       </div>
@@ -223,56 +295,72 @@ export const FeeCollectionPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredRecords.map((rec, idx) => (
-                  <tr key={rec.id}>
-                    <td><input type="checkbox" /></td>
-                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                    <td>
-                      <div className="user-table-cell">
-                        <img src={rec.avatar} alt={rec.studentName} className="user-table-avatar" />
-                        <span className="user-table-name">{rec.studentName}</span>
+                {filteredRecords.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                      <CreditCard size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                      <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                        No fee records found
+                      </div>
+                      <div style={{ fontSize: '13px' }}>
+                        {feeRecords.length === 0
+                          ? 'No fee records have been assigned or recorded yet.'
+                          : 'No fee records match the current filter.'}
                       </div>
                     </td>
-                    <td>{rec.class}</td>
-                    <td>{rec.feePlan}</td>
-                    <td><strong>₹{rec.totalFees.toLocaleString('en-IN')}</strong></td>
-                    <td style={{ color: '#64748B', fontSize: '12.5px' }}>{rec.paymentDate || '—'}</td>
-                    <td>
-                      {rec.paymentMethod ? (
-                        <span className="badge badge-purple">{rec.paymentMethod}</span>
-                      ) : (
-                        <span style={{ color: '#94A3B8' }}>—</span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`badge ${rec.status === 'Paid' ? 'badge-success' : rec.status === 'Pending' ? 'badge-warning' : 'badge-danger'}`}>
-                        {rec.status}
-                      </span>
-                    </td>
-                    <td>
-                      {rec.status === 'Paid' ? (
-                        <button
-                          onClick={() => navigateTo('payment-history')}
-                          style={{ padding: '4px', color: '#6366F1' }}
-                          title="View Receipt"
-                        >
-                          <FileText size={16} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setCollectForm({ ...collectForm, studentId: rec.studentId, amount: rec.totalFees });
-                            setShowCollectModal(true);
-                          }}
-                          className="btn btn-sm btn-outline"
-                          style={{ padding: '3px 8px', fontSize: '11px' }}
-                        >
-                          Collect
-                        </button>
-                      )}
-                    </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredRecords.map((rec, idx) => (
+                    <tr key={rec.id}>
+                      <td><input type="checkbox" /></td>
+                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                      <td>
+                        <div className="user-table-cell">
+                          <img src={rec.avatar} alt={rec.studentName} className="user-table-avatar" />
+                          <span className="user-table-name">{rec.studentName}</span>
+                        </div>
+                      </td>
+                      <td>{rec.class}</td>
+                      <td>{rec.feePlan}</td>
+                      <td><strong>₹{rec.totalFees.toLocaleString('en-IN')}</strong></td>
+                      <td style={{ color: '#64748B', fontSize: '12.5px' }}>{rec.paymentDate || '—'}</td>
+                      <td>
+                        {rec.paymentMethod ? (
+                          <span className="badge badge-purple">{rec.paymentMethod}</span>
+                        ) : (
+                          <span style={{ color: '#94A3B8' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${rec.status === 'Paid' ? 'badge-success' : rec.status === 'Pending' ? 'badge-warning' : 'badge-danger'}`}>
+                          {rec.status}
+                        </span>
+                      </td>
+                      <td>
+                        {rec.status === 'Paid' ? (
+                          <button
+                            onClick={() => navigateTo('payment-history')}
+                            style={{ padding: '4px', color: '#6366F1' }}
+                            title="View Receipt"
+                          >
+                            <FileText size={16} />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setCollectForm({ ...collectForm, studentId: rec.studentId, amount: rec.totalFees });
+                              setShowCollectModal(true);
+                            }}
+                            className="btn btn-sm btn-outline"
+                            style={{ padding: '3px 8px', fontSize: '11px' }}
+                          >
+                            Collect
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -285,11 +373,11 @@ export const FeeCollectionPage: React.FC = () => {
           <div className="card">
             <div className="card-header"><div className="card-title">Collection Overview</div></div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
-              <DonutChart value={82.7} size={110} label="82.7%" sublabel="Collection" color="#6366F1" />
+              <DonutChart value={collectionRate} size={110} label={`${collectionRate}%`} sublabel="Collection" color="#6366F1" />
               <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Collected</span><strong>₹1,98,500</strong></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Pending</span><strong>₹41,500</strong></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Overdue</span><strong style={{ color: '#EF4444' }}>₹12,000</strong></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Collected</span><strong>₹{totalCollected.toLocaleString('en-IN')}</strong></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Pending</span><strong>₹{pendingAmount.toLocaleString('en-IN')}</strong></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Overdue</span><strong style={{ color: '#EF4444' }}>₹{overdueAmount.toLocaleString('en-IN')}</strong></div>
               </div>
             </div>
           </div>
@@ -298,38 +386,26 @@ export const FeeCollectionPage: React.FC = () => {
           <div className="card">
             <div className="card-header"><div className="card-title">Payment Methods</div></div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
-                  <span>UPI</span><strong>45%</strong>
+              {paidRecords.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px 10px', color: '#94A3B8', fontSize: '12.5px' }}>
+                  No payment transactions recorded yet.
                 </div>
-                <div style={{ width: '100%', height: '6px', background: '#F1F5F9', borderRadius: '4px' }}>
-                  <div style={{ width: '45%', height: '100%', background: '#6366F1', borderRadius: '4px' }} />
-                </div>
-              </div>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
-                  <span>Cash</span><strong>28%</strong>
-                </div>
-                <div style={{ width: '100%', height: '6px', background: '#F1F5F9', borderRadius: '4px' }}>
-                  <div style={{ width: '28%', height: '100%', background: '#93C5FD', borderRadius: '4px' }} />
-                </div>
-              </div>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
-                  <span>Card</span><strong>18%</strong>
-                </div>
-                <div style={{ width: '100%', height: '6px', background: '#F1F5F9', borderRadius: '4px' }}>
-                  <div style={{ width: '18%', height: '100%', background: '#C4B5FD', borderRadius: '4px' }} />
-                </div>
-              </div>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
-                  <span>Bank Transfer / Other</span><strong>9%</strong>
-                </div>
-                <div style={{ width: '100%', height: '6px', background: '#F1F5F9', borderRadius: '4px' }}>
-                  <div style={{ width: '9%', height: '100%', background: '#FBCFE8', borderRadius: '4px' }} />
-                </div>
-              </div>
+              ) : (
+                ['UPI', 'Cash', 'Card', 'Bank Transfer'].map((m) => {
+                  const count = methodCounts[m] || 0;
+                  const pct = paidRecords.length > 0 ? Math.round((count / paidRecords.length) * 100) : 0;
+                  return (
+                    <div key={m}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
+                        <span>{m}</span><strong>{pct}% ({count})</strong>
+                      </div>
+                      <div style={{ width: '100%', height: '6px', background: '#F1F5F9', borderRadius: '4px' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: '#6366F1', borderRadius: '4px' }} />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -359,9 +435,13 @@ export const FeeCollectionPage: React.FC = () => {
                     value={collectForm.studentId}
                     onChange={(e) => setCollectForm({ ...collectForm, studentId: e.target.value })}
                   >
-                    {MOCK_STUDENTS.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name} ({s.class} - {s.admissionNo})</option>
-                    ))}
+                    {students.length === 0 ? (
+                      <option value="">No students enrolled</option>
+                    ) : (
+                      students.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.class} - {s.admissionNo})</option>
+                      ))
+                    )}
                   </select>
                 </div>
 
@@ -438,7 +518,7 @@ export const FeeCollectionPage: React.FC = () => {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowCollectModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Record Payment</button>
+                <button type="submit" className="btn btn-primary" disabled={students.length === 0}>Record Payment</button>
               </div>
             </form>
           </div>

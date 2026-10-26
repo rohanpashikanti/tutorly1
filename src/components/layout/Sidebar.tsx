@@ -20,9 +20,12 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getStoredStudents, getStoredTeachers } from '../../utils/storage';
 
 export const Sidebar: React.FC = () => {
   const { role, currentRoute, navigateTo, memberships, activeInstitutionId, setActiveInstitutionId } = useApp();
+  const studentCount = getStoredStudents().length;
+  const teacherCount = getStoredTeachers().length;
   const [openSubmenus, setOpenSubmenus] = useState<Record<string, boolean>>({
     attendance: true,
     schoolExams: false,
@@ -86,7 +89,7 @@ export const Sidebar: React.FC = () => {
             >
               <Users size={18} />
               <span>Students</span>
-              <span className="nav-badge">248</span>
+              {studentCount > 0 && <span className="nav-badge">{studentCount}</span>}
             </button>
 
             <button
@@ -96,7 +99,7 @@ export const Sidebar: React.FC = () => {
             >
               <UserCheck size={18} />
               <span>Teachers</span>
-              <span className="nav-badge">12</span>
+              {teacherCount > 0 && <span className="nav-badge">{teacherCount}</span>}
             </button>
 
             <button

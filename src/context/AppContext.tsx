@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { createAuthClient } from 'better-auth/react';
 import { User, UserRole, Student } from '../types';
-import { MOCK_STUDENTS } from '../data/mockData';
+import { getStoredStudents } from '../utils/storage';
 
 interface ToastMessage {
   id: string;
@@ -68,6 +68,29 @@ async function requestSession(): Promise<AuthSession | null> {
   return await response.json() as AuthSession;
 }
 
+const EMPTY_STUDENT: Student = {
+  id: '',
+  name: 'No student selected',
+  rollNo: '—',
+  admissionNo: '—',
+  avatar: '',
+  gender: 'Male',
+  dob: '',
+  age: 0,
+  class: '—',
+  batch: '—',
+  admissionDate: '',
+  status: 'Active',
+  attendanceRate: 0,
+  attendancePercentage: 0,
+  averageScore: 0,
+  parentName: '',
+  parentPhone: '',
+  parent: { fatherName: '', phone: '', email: '', address: '' },
+  academic: { schoolExamAvg: 0, tuitionTestAvg: 0, pendingHomework: 0, rank: 0, subjectScores: {} },
+  fees: { totalFee: 0, paidAmount: 0, pendingAmount: 0, nextDue: '—', nextDueAmount: 0, status: 'Paid' },
+};
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
@@ -75,9 +98,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [currentRoute, setCurrentRoute] = useState('admin-dashboard');
   const [academicYear, setAcademicYear] = useState('Academic Year 2026 - 2027');
   const [institutionNameOverride, setInstitutionNameOverride] = useState('');
-  const [selectedChildId, setSelectedChildId] = useState('stu-001');
-  const [selectedStudentId, setSelectedStudentId] = useState<string | null>('stu-001');
-  const [selectedBatchId, setSelectedBatchId] = useState('c10-a');
+  const [selectedChildId, setSelectedChildId] = useState('');
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+  const [selectedBatchId, setSelectedBatchId] = useState('');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -179,7 +202,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const selectedChild = MOCK_STUDENTS.find((student) => student.id === selectedChildId) || MOCK_STUDENTS[0];
+  const selectedChild = getStoredStudents().find((student) => student.id === selectedChildId) || EMPTY_STUDENT;
 
   return (
     <AppContext.Provider value={{

@@ -16,7 +16,6 @@ import {
   Download
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_CLASSES, MOCK_BATCHES, MOCK_SUBJECTS } from '../../data/mockData';
 import { ClassItem, BatchItem, SubjectItem } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { api } from '../../api/client';
@@ -24,10 +23,12 @@ import { api } from '../../api/client';
 export const ClassesBatchesSubjects: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
   const [activeTab, setActiveTab] = useState<'Classes' | 'Batches' | 'Subjects'>('Classes');
-  const [classesList, setClassesList] = useState<ClassItem[]>(MOCK_CLASSES);
-  const [batchesList, setBatchesList] = useState<BatchItem[]>(MOCK_BATCHES);
-  const [subjectsList, setSubjectsList] = useState<SubjectItem[]>(MOCK_SUBJECTS);
+  const [classesList, setClassesList] = useState<ClassItem[]>([]);
+  const [batchesList, setBatchesList] = useState<BatchItem[]>([]);
+  const [subjectsList, setSubjectsList] = useState<SubjectItem[]>([]);
   const [selectedClass, setSelectedClass] = useState<ClassItem | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAddClassModal, setShowAddClassModal] = useState(false);
   const [showAddBatchModal, setShowAddBatchModal] = useState(false);
   const [showAddSubjectModal, setShowAddSubjectModal] = useState(false);
@@ -36,20 +37,22 @@ export const ClassesBatchesSubjects: React.FC = () => {
 
   const loadAcademics = React.useCallback(async () => {
     if (!activeInstitutionId) return;
+    setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await api.academics.getOverview(activeInstitutionId);
-      if (res.classes && res.classes.length > 0) {
-        setClassesList(res.classes);
-        setSelectedClass((prev) => prev || res.classes[0]);
-      }
-      if (res.batches && res.batches.length > 0) {
-        setBatchesList(res.batches);
-      }
-      if (res.subjects && res.subjects.length > 0) {
-        setSubjectsList(res.subjects);
-      }
+      const classes = res.classes || [];
+      const batches = res.batches || [];
+      const subjects = res.subjects || [];
+      setClassesList(classes);
+      setBatchesList(batches);
+      setSubjectsList(subjects);
+      setSelectedClass(classes.length > 0 ? (prev => prev ? classes.find(c => c.id === prev.id) || classes[0] : classes[0]) : null);
     } catch (err) {
       console.error('Error fetching academics from D1:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load academic records');
+    } finally {
+      setIsLoading(false);
     }
   }, [activeInstitutionId]);
 
@@ -231,6 +234,14 @@ export const ClassesBatchesSubjects: React.FC = () => {
         </button>
       </div>
 
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadAcademics()}>Retry</button>
+        </div>
+      )}
+
       {/* 4 Stat Cards */}
       <div className="stat-grid-4">
         <div className="stat-card">
@@ -239,9 +250,9 @@ export const ClassesBatchesSubjects: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Classes</div>
-            <div className="stat-value">10</div>
+            <div className="stat-value">{isLoading ? '—' : classesList.length}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">From Class 6 to 12</span>
+              <span className="stat-subtext">Configured academic classes</span>
             </div>
           </div>
         </div>
@@ -252,7 +263,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Batches</div>
-            <div className="stat-value">14</div>
+            <div className="stat-value">{isLoading ? '—' : batchesList.length}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Across all classes</span>
             </div>
@@ -265,7 +276,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Active Subjects</div>
-            <div className="stat-value">8</div>
+            <div className="stat-value">{isLoading ? '—' : subjectsList.length}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Core & Optional</span>
             </div>
@@ -278,7 +289,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Enrollments</div>
-            <div className="stat-value">248</div>
+            <div className="stat-value">{isLoading ? '—' : batchesList.reduce((acc, b) => acc + (b.studentsCount || 0), 0)}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Across all batches</span>
             </div>
@@ -325,42 +336,56 @@ export const ClassesBatchesSubjects: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {classesList.map((cls, idx) => {
-                    const isSelected = selectedClass?.id === cls.id;
-                    return (
-                      <tr
-                        key={cls.id}
-                        onClick={() => setSelectedClass(cls)}
-                        style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
-                      >
-                        <td onClick={(e) => e.stopPropagation()}><input type="checkbox" /></td>
-                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#EEF2FF', color: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px' }}>
-                              {cls.code}
+                  {classesList.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                        <Layers size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                        <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                          No classes found
+                        </div>
+                        <div style={{ fontSize: '13px' }}>
+                          No classes configured yet. Click "Add Class" to set up your first class.
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    classesList.map((cls, idx) => {
+                      const isSelected = selectedClass?.id === cls.id;
+                      return (
+                        <tr
+                          key={cls.id}
+                          onClick={() => setSelectedClass(cls)}
+                          style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
+                        >
+                          <td onClick={(e) => e.stopPropagation()}><input type="checkbox" /></td>
+                          <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#EEF2FF', color: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px' }}>
+                                {cls.code}
+                              </div>
+                              <span style={{ fontWeight: 700, color: '#0F172A' }}>{cls.name}</span>
                             </div>
-                            <span style={{ fontWeight: 700, color: '#0F172A' }}>{cls.name}</span>
-                          </div>
-                        </td>
-                        <td>{cls.sections.length} Batches</td>
-                        <td><strong>{cls.totalStudents}</strong></td>
-                        <td>{cls.subjectsCount} Subjects</td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <img src={cls.teacherAvatar} alt={cls.classTeacher} style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover' }} />
-                            <span>{cls.classTeacher}</span>
-                          </div>
-                        </td>
-                        <td>
-                          <span className="badge badge-success">{cls.status}</span>
-                        </td>
-                        <td onClick={(e) => e.stopPropagation()}>
-                          <ChevronRight size={16} color="#94A3B8" />
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          </td>
+                          <td>{cls.sections.length} Batches</td>
+                          <td><strong>{cls.totalStudents}</strong></td>
+                          <td>{cls.subjectsCount} Subjects</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <img src={cls.teacherAvatar} alt={cls.classTeacher} style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover' }} />
+                              <span>{cls.classTeacher}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="badge badge-success">{cls.status}</span>
+                          </td>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <ChevronRight size={16} color="#94A3B8" />
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -381,16 +406,30 @@ export const ClassesBatchesSubjects: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {batchesList.map((b) => (
-                    <tr key={b.id}>
-                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{b.name}</td>
-                      <td><span className="badge badge-purple">{b.className}</span></td>
-                      <td><span style={{ color: '#475569', fontSize: '13px' }}>{b.timing}</span></td>
-                      <td><span style={{ fontSize: '12px', color: '#64748B' }}>{b.days.join(', ')}</span></td>
-                      <td><strong>{b.studentsCount} Students</strong></td>
-                      <td>{b.teacher}</td>
+                  {batchesList.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                        <Clock size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                        <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                          No batches found
+                        </div>
+                        <div style={{ fontSize: '13px' }}>
+                          No batches configured yet. Click "Add Batch" to set up your first batch.
+                        </div>
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    batchesList.map((b) => (
+                      <tr key={b.id}>
+                        <td style={{ fontWeight: 700, color: '#0F172A' }}>{b.name}</td>
+                        <td><span className="badge badge-purple">{b.className}</span></td>
+                        <td><span style={{ color: '#475569', fontSize: '13px' }}>{b.timing}</span></td>
+                        <td><span style={{ fontSize: '12px', color: '#64748B' }}>{b.days.join(', ')}</span></td>
+                        <td><strong>{b.studentsCount} Students</strong></td>
+                        <td>{b.teacher}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -409,25 +448,39 @@ export const ClassesBatchesSubjects: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {subjectsList.map((sub) => (
-                    <tr key={sub.id}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: sub.color }} />
-                          <span style={{ fontWeight: 700, color: '#0F172A' }}>{sub.name}</span>
+                  {subjectsList.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                        <BookOpen size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                        <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                          No subjects found
+                        </div>
+                        <div style={{ fontSize: '13px' }}>
+                          No subjects configured yet. Click "Add Subject" to define curriculum subjects.
                         </div>
                       </td>
-                      <td><code>{sub.code}</code></td>
-                      <td>
-                        <span className={`badge ${sub.isCore ? 'badge-purple' : 'badge-neutral'}`}>
-                          {sub.isCore ? 'Core Subject' : 'Optional'}
-                        </span>
-                      </td>
-                      <td>
-                        <span style={{ fontSize: '12.5px', color: '#64748B' }}>{sub.classes.join(', ')}</span>
-                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    subjectsList.map((sub) => (
+                      <tr key={sub.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: sub.color }} />
+                            <span style={{ fontWeight: 700, color: '#0F172A' }}>{sub.name}</span>
+                          </div>
+                        </td>
+                        <td><code>{sub.code}</code></td>
+                        <td>
+                          <span className={`badge ${sub.isCore ? 'badge-purple' : 'badge-neutral'}`}>
+                            {sub.isCore ? 'Core Subject' : 'Optional'}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontSize: '12.5px', color: '#64748B' }}>{sub.classes.join(', ')}</span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

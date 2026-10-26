@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DonutChart, BarChart } from '../../components/charts/Charts';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { getStoredStudents } from '../../utils/storage';
 import { downloadCSV, downloadSampleDocument } from '../../utils/demoActions';
 
 interface StudentMarkRow {
@@ -35,17 +35,19 @@ export const SchoolExamMarksPage: React.FC = () => {
   const [selectedSection, setSelectedSection] = useState('A');
   const [activeSubject, setActiveSubject] = useState('Mathematics');
 
-  // Student marks rows matching reference screenshot 11
-  const [marksData, setMarksData] = useState<StudentMarkRow[]>([
-    { id: '1', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, marks: 96, maxMarks: 100, grade: 'A+', percentage: 96, remarks: 'Excellent' },
-    { id: '2', name: 'Bhavana Reddy', rollNo: '002', avatar: MOCK_STUDENTS[2].avatar, marks: 88, maxMarks: 100, grade: 'A', percentage: 88, remarks: 'Very Good' },
-    { id: '3', name: 'Charan Kumar', rollNo: '003', avatar: MOCK_STUDENTS[3].avatar, marks: 72, maxMarks: 100, grade: 'B+', percentage: 72, remarks: 'Good' },
-    { id: '4', name: 'Divya Nair', rollNo: '004', avatar: MOCK_STUDENTS[4].avatar, marks: 85, maxMarks: 100, grade: 'A', percentage: 85, remarks: 'Very Good' },
-    { id: '5', name: 'Harshith Reddy', rollNo: '005', avatar: MOCK_STUDENTS[5].avatar, marks: 67, maxMarks: 100, grade: 'B', percentage: 67, remarks: 'Satisfactory' },
-    { id: '6', name: 'Kavya Sri', rollNo: '006', avatar: MOCK_STUDENTS[1].avatar, marks: 91, maxMarks: 100, grade: 'A+', percentage: 91, remarks: 'Excellent' },
-    { id: '7', name: 'Manish Verma', rollNo: '007', avatar: MOCK_STUDENTS[6].avatar, marks: 42, maxMarks: 100, grade: 'C', percentage: 42, remarks: 'Needs Improvement' },
-    { id: '8', name: 'Nithya Sree', rollNo: '008', avatar: MOCK_STUDENTS[7].avatar, marks: 78, maxMarks: 100, grade: 'B+', percentage: 78, remarks: 'Good' },
-  ]);
+  const [marksData, setMarksData] = useState<StudentMarkRow[]>(() => {
+    return getStoredStudents().map((s) => ({
+      id: s.id,
+      name: s.name,
+      rollNo: s.rollNo,
+      avatar: s.avatar,
+      marks: 0,
+      maxMarks: 100,
+      grade: '—',
+      percentage: 0,
+      remarks: '',
+    }));
+  });
 
   const handleExportCSV = () => {
     const data = marksData.map((r) => ({

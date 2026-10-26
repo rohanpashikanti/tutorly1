@@ -38,18 +38,19 @@ export const ParentDashboard: React.FC = () => {
     }).catch(() => {});
   }, [activeInstitutionId]);
 
-  const isAditya = selectedChildId === 'stu-001';
+  const children = parentData?.children || [];
+  const activeChild = children.find((c: any) => c.id === selectedChildId) || children[0];
 
   // Real calendar events from unified storage
   const calendarEvents = React.useMemo(() => {
     const all = getStoredCalendarEvents();
-    // Filter by relevant class or general
+    if (!activeChild) return all.slice(0, 4);
     const relevant = all.filter((ev) => {
       if (!ev.applicableClass || ev.applicableClass === 'All Classes') return true;
-      return isAditya ? ev.applicableClass.includes('10') : ev.applicableClass.includes('9');
+      return ev.applicableClass.includes(activeChild.class);
     });
     return relevant.length > 0 ? relevant.slice(0, 4) : all.slice(0, 4);
-  }, [isAditya]);
+  }, [activeChild]);
 
   const getEventBadgeColor = (type: CalendarEvent['type']) => {
     switch (type) {
@@ -69,29 +70,21 @@ export const ParentDashboard: React.FC = () => {
   };
 
   // Real fee status for active child
-  const feeInfo = parentData?.children?.[0]?.fees
+  const feeInfo = activeChild?.fees
     ? {
-        status: parentData.children[0].fees.status,
-        period: 'November 2026',
-        dueAmount: Math.min(3000, parentData.children[0].fees.pendingAmount),
-        totalRemaining: parentData.children[0].fees.pendingAmount,
-        dueDate: '05 Nov 2026'
-      }
-    : (isAditya
-    ? {
-        status: 'Pending',
-        period: 'November 2026',
-        dueAmount: 3000,
-        totalRemaining: 12000,
-        dueDate: '05 Nov 2026'
+        status: activeChild.fees.status || (activeChild.fees.pendingAmount > 0 ? 'Pending' : 'Paid'),
+        period: 'Current Term',
+        dueAmount: activeChild.fees.pendingAmount || 0,
+        totalRemaining: activeChild.fees.pendingAmount || 0,
+        dueDate: activeChild.fees.pendingAmount > 0 ? 'Due Now' : '—'
       }
     : {
-        status: 'Pending',
-        period: 'November 2026',
-        dueAmount: 3000,
-        totalRemaining: 10500,
-        dueDate: '05 Nov 2026'
-      });
+        status: 'Paid',
+        period: 'Current Term',
+        dueAmount: 0,
+        totalRemaining: 0,
+        dueDate: '—'
+      };
 
   return (
     <div className="page-container">
@@ -109,52 +102,40 @@ export const ParentDashboard: React.FC = () => {
           </p>
         </div>
 
-        {/* Compact Child Context Selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>Student:</span>
-          <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: '10px', padding: '3px' }}>
-            <button
-              onClick={() => {
-                setSelectedChildId('stu-001');
-                showToast('Viewing updates for Aditya Sharma', 'info');
-              }}
-              style={{
-                border: 'none',
-                background: isAditya ? '#FFFFFF' : 'transparent',
-                color: isAditya ? '#4F46E5' : '#475569',
-                fontWeight: isAditya ? 700 : 500,
-                fontSize: '12.5px',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                boxShadow: isAditya ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              Aditya Sharma (Class 10)
-            </button>
-            <button
-              onClick={() => {
-                setSelectedChildId('stu-002');
-                showToast('Viewing updates for Kavya Sharma', 'info');
-              }}
-              style={{
-                border: 'none',
-                background: !isAditya ? '#FFFFFF' : 'transparent',
-                color: !isAditya ? '#4F46E5' : '#475569',
-                fontWeight: !isAditya ? 700 : 500,
-                fontSize: '12.5px',
-                padding: '6px 14px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                boxShadow: !isAditya ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              Kavya Sharma (Class 9)
-            </button>
+        {/* Dynamic Child Context Selector */}
+        {children.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>Student:</span>
+            <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: '10px', padding: '3px' }}>
+              {children.map((ch: any) => {
+                const isSelected = (activeChild?.id || '') === ch.id;
+                return (
+                  <button
+                    key={ch.id}
+                    onClick={() => {
+                      setSelectedChildId(ch.id);
+                      showToast(`Viewing updates for ${ch.name}`, 'info');
+                    }}
+                    style={{
+                      border: 'none',
+                      background: isSelected ? '#FFFFFF' : 'transparent',
+                      color: isSelected ? '#4F46E5' : '#475569',
+                      fontWeight: isSelected ? 700 : 500,
+                      fontSize: '12.5px',
+                      padding: '6px 14px',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      boxShadow: isSelected ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {ch.name} ({ch.class})
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* 1. Important Center Notice / Updates */}

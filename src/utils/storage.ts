@@ -4,19 +4,7 @@
  * initialized with default mock data if not yet saved.
  */
 
-import {
-  MOCK_CALENDAR_EVENTS,
-  MOCK_STUDENTS,
-  MOCK_TEACHERS,
-  MOCK_CLASSES,
-  MOCK_BATCHES,
-  MOCK_SUBJECTS,
-  MOCK_SCHOOL_EXAMS,
-  MOCK_TUITION_TESTS,
-  MOCK_FEE_RECORDS,
-  MOCK_USERS,
-  INSTITUTION_INFO
-} from '../data/mockData';
+import { INSTITUTION_INFO } from '../data/mockData';
 import {
   CalendarEvent,
   Student,
@@ -29,7 +17,9 @@ import {
   FeeRecord,
   User,
   AttendanceRecord,
-  StudentMarks
+  StudentMarks,
+  Announcement,
+  HomeworkItem
 } from '../types';
 
 export const STORAGE_KEYS = {
@@ -46,13 +36,16 @@ export const STORAGE_KEYS = {
   STUDENT_FEES: 'tutorly_student_fees',
   USERS: 'tutorly_users',
   INSTITUTION_SETTINGS: 'tutorly_institution_settings',
-  ATTENDANCE_SESSIONS: 'tutorly_attendance_sessions'
+  ATTENDANCE_SESSIONS: 'tutorly_attendance_sessions',
+  ANNOUNCEMENTS: 'tutorly_announcements',
+  HOMEWORK: 'tutorly_homework'
 };
 
 /**
  * Generic getter from localStorage with fallback
  */
 export function getStoredData<T>(key: string, defaultValue: T): T {
+  if (typeof localStorage === 'undefined') return defaultValue;
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return defaultValue;
@@ -67,6 +60,7 @@ export function getStoredData<T>(key: string, defaultValue: T): T {
  * Generic setter to localStorage
  */
 export function setStoredData<T>(key: string, value: T): void {
+  if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
@@ -74,11 +68,41 @@ export function setStoredData<T>(key: string, value: T): void {
   }
 }
 
+/**
+ * Clear all business data keys from localStorage
+ */
+export function clearAllStoredBusinessData(): void {
+  const businessKeys = [
+    STORAGE_KEYS.CALENDAR_EVENTS,
+    STORAGE_KEYS.STUDENTS,
+    STORAGE_KEYS.TEACHERS,
+    STORAGE_KEYS.CLASSES,
+    STORAGE_KEYS.BATCHES,
+    STORAGE_KEYS.SUBJECTS,
+    STORAGE_KEYS.SCHOOL_EXAMS,
+    STORAGE_KEYS.SCHOOL_EXAM_MARKS,
+    STORAGE_KEYS.TUITION_TESTS,
+    STORAGE_KEYS.TUITION_TEST_MARKS,
+    STORAGE_KEYS.STUDENT_FEES,
+    STORAGE_KEYS.USERS,
+    STORAGE_KEYS.ATTENDANCE_SESSIONS,
+    STORAGE_KEYS.ANNOUNCEMENTS,
+    STORAGE_KEYS.HOMEWORK,
+  ];
+  for (const k of businessKeys) {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Calendar Events
 // ---------------------------------------------------------------------------
 export function getStoredCalendarEvents(): CalendarEvent[] {
-  return getStoredData<CalendarEvent[]>(STORAGE_KEYS.CALENDAR_EVENTS, MOCK_CALENDAR_EVENTS);
+  return getStoredData<CalendarEvent[]>(STORAGE_KEYS.CALENDAR_EVENTS, []);
 }
 
 export function saveStoredCalendarEvents(events: CalendarEvent[]): void {
@@ -89,7 +113,7 @@ export function saveStoredCalendarEvents(events: CalendarEvent[]): void {
 // Students
 // ---------------------------------------------------------------------------
 export function getStoredStudents(): Student[] {
-  return getStoredData<Student[]>(STORAGE_KEYS.STUDENTS, MOCK_STUDENTS);
+  return getStoredData<Student[]>(STORAGE_KEYS.STUDENTS, []);
 }
 
 export function saveStoredStudents(students: Student[]): void {
@@ -100,7 +124,7 @@ export function saveStoredStudents(students: Student[]): void {
 // Teachers
 // ---------------------------------------------------------------------------
 export function getStoredTeachers(): Teacher[] {
-  return getStoredData<Teacher[]>(STORAGE_KEYS.TEACHERS, MOCK_TEACHERS);
+  return getStoredData<Teacher[]>(STORAGE_KEYS.TEACHERS, []);
 }
 
 export function saveStoredTeachers(teachers: Teacher[]): void {
@@ -111,7 +135,7 @@ export function saveStoredTeachers(teachers: Teacher[]): void {
 // Batches & Classes
 // ---------------------------------------------------------------------------
 export function getStoredBatches(): BatchItem[] {
-  return getStoredData<BatchItem[]>(STORAGE_KEYS.BATCHES, MOCK_BATCHES);
+  return getStoredData<BatchItem[]>(STORAGE_KEYS.BATCHES, []);
 }
 
 export function saveStoredBatches(batches: BatchItem[]): void {
@@ -119,7 +143,7 @@ export function saveStoredBatches(batches: BatchItem[]): void {
 }
 
 export function getStoredClasses(): ClassItem[] {
-  return getStoredData<ClassItem[]>(STORAGE_KEYS.CLASSES, MOCK_CLASSES);
+  return getStoredData<ClassItem[]>(STORAGE_KEYS.CLASSES, []);
 }
 
 export function saveStoredClasses(classes: ClassItem[]): void {
@@ -127,7 +151,7 @@ export function saveStoredClasses(classes: ClassItem[]): void {
 }
 
 export function getStoredSubjects(): SubjectItem[] {
-  return getStoredData<SubjectItem[]>(STORAGE_KEYS.SUBJECTS, MOCK_SUBJECTS);
+  return getStoredData<SubjectItem[]>(STORAGE_KEYS.SUBJECTS, []);
 }
 
 export function saveStoredSubjects(subjects: SubjectItem[]): void {
@@ -138,7 +162,7 @@ export function saveStoredSubjects(subjects: SubjectItem[]): void {
 // School Examinations & Marks
 // ---------------------------------------------------------------------------
 export function getStoredSchoolExams(): Exam[] {
-  return getStoredData<Exam[]>(STORAGE_KEYS.SCHOOL_EXAMS, MOCK_SCHOOL_EXAMS);
+  return getStoredData<Exam[]>(STORAGE_KEYS.SCHOOL_EXAMS, []);
 }
 
 export function saveStoredSchoolExams(exams: Exam[]): void {
@@ -157,7 +181,7 @@ export function saveStoredSchoolExamMarks(marksMap: Record<string, StudentMarks[
 // Tuition Tests & Marks
 // ---------------------------------------------------------------------------
 export function getStoredTuitionTests(): TuitionTest[] {
-  return getStoredData<TuitionTest[]>(STORAGE_KEYS.TUITION_TESTS, MOCK_TUITION_TESTS);
+  return getStoredData<TuitionTest[]>(STORAGE_KEYS.TUITION_TESTS, []);
 }
 
 export function saveStoredTuitionTests(tests: TuitionTest[]): void {
@@ -197,18 +221,21 @@ export function saveStoredAttendanceSession(sessionKey: string, session: Attenda
 // Student Fees
 // ---------------------------------------------------------------------------
 export function getStoredStudentFees(): FeeRecord[] {
-  return getStoredData<FeeRecord[]>(STORAGE_KEYS.STUDENT_FEES, MOCK_FEE_RECORDS);
+  return getStoredData<FeeRecord[]>(STORAGE_KEYS.STUDENT_FEES, []);
 }
 
 export function saveStoredStudentFees(fees: FeeRecord[]): void {
   setStoredData(STORAGE_KEYS.STUDENT_FEES, fees);
 }
 
+export const getStoredFeeRecords = getStoredStudentFees;
+export const saveStoredFeeRecords = saveStoredStudentFees;
+
 // ---------------------------------------------------------------------------
 // Users & Permissions
 // ---------------------------------------------------------------------------
 export function getStoredUsers(): User[] {
-  return getStoredData<User[]>(STORAGE_KEYS.USERS, MOCK_USERS);
+  return getStoredData<User[]>(STORAGE_KEYS.USERS, []);
 }
 
 export function saveStoredUsers(users: User[]): void {
@@ -266,3 +293,23 @@ export function getStoredInstitutionSettings(): InstitutionSettingsConfig {
 export function saveStoredInstitutionSettings(settings: InstitutionSettingsConfig): void {
   setStoredData(STORAGE_KEYS.INSTITUTION_SETTINGS, settings);
 }
+
+// ---------------------------------------------------------------------------
+// Announcements & Homework
+// ---------------------------------------------------------------------------
+export function getStoredAnnouncements(): Announcement[] {
+  return getStoredData<Announcement[]>(STORAGE_KEYS.ANNOUNCEMENTS, []);
+}
+
+export function saveStoredAnnouncements(announcements: Announcement[]): void {
+  setStoredData(STORAGE_KEYS.ANNOUNCEMENTS, announcements);
+}
+
+export function getStoredHomework(): HomeworkItem[] {
+  return getStoredData<HomeworkItem[]>(STORAGE_KEYS.HOMEWORK, []);
+}
+
+export function saveStoredHomework(homework: HomeworkItem[]): void {
+  setStoredData(STORAGE_KEYS.HOMEWORK, homework);
+}
+

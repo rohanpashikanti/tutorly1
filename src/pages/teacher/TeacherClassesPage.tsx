@@ -13,7 +13,7 @@ import {
   Check
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { getStoredStudents } from '../../utils/storage';
 import { downloadCSV } from '../../utils/demoActions';
 import { ParentContactActions } from '../../components/common/ParentContactActions';
 
@@ -32,6 +32,8 @@ export const TeacherClassesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Needs Attention'>('All');
 
+  const allStudents = getStoredStudents();
+
   const assignedBatches: ClassCohort[] = [
     {
       id: 'c10-a',
@@ -40,7 +42,7 @@ export const TeacherClassesPage: React.FC = () => {
       section: 'Section A',
       batchTime: 'Morning (08:30 AM - 10:30 AM)',
       subject: 'Mathematics',
-      studentsCount: 32
+      studentsCount: allStudents.filter(s => s.class.includes('10')).length
     },
     {
       id: 'c9-b',
@@ -49,14 +51,14 @@ export const TeacherClassesPage: React.FC = () => {
       section: 'Section B',
       batchTime: 'Evening (04:30 PM - 06:30 PM)',
       subject: 'Science',
-      studentsCount: 24
+      studentsCount: allStudents.filter(s => s.class.includes('9')).length
     }
   ];
 
   const currentCohort = assignedBatches.find((b) => b.id === selectedBatchId) || assignedBatches[0];
 
   // Filter students by assigned cohort
-  const cohortStudents = MOCK_STUDENTS.filter(
+  const cohortStudents = allStudents.filter(
     (s) => (selectedBatchId === 'c10-a' ? s.class.includes('10') : s.class.includes('9'))
   );
 

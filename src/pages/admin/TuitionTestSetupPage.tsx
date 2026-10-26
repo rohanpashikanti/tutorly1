@@ -16,14 +16,14 @@ import {
   Download
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_TUITION_TESTS } from '../../data/mockData';
+import { getStoredTuitionTests, saveStoredTuitionTests } from '../../utils/storage';
 import { TuitionTest } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 
 export const TuitionTestSetupPage: React.FC = () => {
   const { navigateTo, showToast } = useApp();
   const [activeTab, setActiveTab] = useState<'Tests' | 'Question Bank' | 'Test Templates' | 'Configurations'>('Tests');
-  const [tests, setTests] = useState<TuitionTest[]>(MOCK_TUITION_TESTS);
+  const [tests, setTests] = useState<TuitionTest[]>(getStoredTuitionTests);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -65,7 +65,9 @@ export const TuitionTestSetupPage: React.FC = () => {
       maxMarks: newTest.maxMarks,
       status: 'Upcoming',
     };
-    setTests([created, ...tests]);
+    const updated = [created, ...tests];
+    setTests(updated);
+    saveStoredTuitionTests(updated);
     setShowCreateModal(false);
     showToast(`Tuition test "${newTest.name}" scheduled successfully!`, 'success');
   };

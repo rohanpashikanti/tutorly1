@@ -16,14 +16,14 @@ import {
 } from 'lucide-react';
 import { Download } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_SCHOOL_EXAMS } from '../../data/mockData';
+import { getStoredSchoolExams, saveStoredSchoolExams } from '../../utils/storage';
 import { Exam } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 
 export const SchoolExamSetupPage: React.FC = () => {
   const { navigateTo, showToast } = useApp();
   const [activeTab, setActiveTab] = useState<'Examinations' | 'Subjects & Marks' | 'Grading System' | 'Configurations'>('Examinations');
-  const [exams, setExams] = useState<Exam[]>(MOCK_SCHOOL_EXAMS);
+  const [exams, setExams] = useState<Exam[]>(getStoredSchoolExams);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
@@ -70,7 +70,9 @@ export const SchoolExamSetupPage: React.FC = () => {
       status: 'Upcoming',
       academicYear: '2026 - 2027',
     };
-    setExams([...exams, created]);
+    const updated = [...exams, created];
+    setExams(updated);
+    saveStoredSchoolExams(updated);
     setShowCreateModal(false);
     setWizardStep(1);
     showToast(`School Examination "${newExam.name}" configured and published!`, 'success');

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DonutChart, BarChart } from '../../components/charts/Charts';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { getStoredStudents } from '../../utils/storage';
 import { downloadCSV, downloadSampleDocument } from '../../utils/demoActions';
 
 interface StudentRow {
@@ -35,16 +35,19 @@ export const TuitionTestMarksPage: React.FC = () => {
   const [selectedClass, setSelectedClass] = useState('Class 10 - A');
   const [selectedSubject, setSelectedSubject] = useState('Physics');
 
-  const [studentRows, setStudentRows] = useState<StudentRow[]>([
-    { id: '1', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, marks: 96, pct: 96, grade: 'A+', remarks: 'Excellent', status: 'Entered' },
-    { id: '2', name: 'Bhavana Reddy', rollNo: '002', avatar: MOCK_STUDENTS[2].avatar, marks: 88, pct: 88, grade: 'A', remarks: 'Very Good', status: 'Entered' },
-    { id: '3', name: 'Charan Kumar', rollNo: '003', avatar: MOCK_STUDENTS[3].avatar, marks: 72, pct: 72, grade: 'B+', remarks: 'Good', status: 'Entered' },
-    { id: '4', name: 'Divya Nair', rollNo: '004', avatar: MOCK_STUDENTS[4].avatar, marks: 85, pct: 85, grade: 'A', remarks: 'Very Good', status: 'Entered' },
-    { id: '5', name: 'Harshith Reddy', rollNo: '005', avatar: MOCK_STUDENTS[5].avatar, marks: 67, pct: 67, grade: 'B', remarks: 'Can improve', status: 'Entered' },
-    { id: '6', name: 'Kavya Sri', rollNo: '006', avatar: MOCK_STUDENTS[1].avatar, marks: 91, pct: 91, grade: 'A+', remarks: 'Excellent', status: 'Entered' },
-    { id: '7', name: 'Manish Verma', rollNo: '007', avatar: MOCK_STUDENTS[6].avatar, marks: 42, pct: 42, grade: 'C', remarks: 'Needs improvement', status: 'Entered' },
-    { id: '8', name: 'Nithya Sree', rollNo: '008', avatar: MOCK_STUDENTS[7].avatar, marks: 78, pct: 78, grade: 'B+', remarks: 'Good', status: 'Entered' },
-  ]);
+  const [studentRows, setStudentRows] = useState<StudentRow[]>(() => {
+    return getStoredStudents().map((s) => ({
+      id: s.id,
+      name: s.name,
+      rollNo: s.rollNo,
+      avatar: s.avatar,
+      marks: 0,
+      pct: 0,
+      grade: '—',
+      remarks: '',
+      status: 'Draft',
+    }));
+  });
 
   const handleExportCSV = () => {
     const data = studentRows.map((s) => ({

@@ -38,17 +38,14 @@ dashboardRouter.get('/:institutionId/dashboard/summary', async (c) => {
     .bind(instId, todayStr)
     .first<{ total_marked: number; present_count: number; absent_count: number }>();
 
-  let todayRate = 92;
-  let presentCount = 228;
-  let absentCount = 20;
+  let todayRate = 0;
+  let presentCount = 0;
+  let absentCount = 0;
 
   if (attSummary && attSummary.total_marked > 0) {
     todayRate = Math.round((attSummary.present_count / attSummary.total_marked) * 100);
     presentCount = attSummary.present_count;
     absentCount = attSummary.absent_count;
-  } else if ((counts?.total_students ?? 0) > 0) {
-    presentCount = Math.round((counts?.total_students ?? 0) * 0.92);
-    absentCount = (counts?.total_students ?? 0) - presentCount;
   }
 
   // 3. Fee metrics (This Month, Last Month)
@@ -62,7 +59,7 @@ dashboardRouter.get('/:institutionId/dashboard/summary', async (c) => {
     .first<{ total_paise: number }>();
 
   const currentMonthCollectedRupees = Math.round((feeCurrentMonth?.total_paise ?? 0) / 100);
-  const displayFeeRupees = currentMonthCollectedRupees > 0 ? currentMonthCollectedRupees : 184500;
+  const displayFeeRupees = currentMonthCollectedRupees;
 
   // 4. Monthly collection trends (last 6 months)
   const monthlyTrendsRaw = await DB.prepare(

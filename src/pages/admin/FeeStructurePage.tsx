@@ -1,28 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   CreditCard,
   Plus,
   Search,
-  Filter,
   DollarSign,
   TrendingUp,
   Clock,
   CheckCircle2,
-  AlertCircle,
   X,
-  ChevronRight,
   Download
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_FEE_PLANS, MOCK_FEE_RECORDS, MOCK_STUDENTS } from '../../data/mockData';
-import { FeePlan } from '../../types';
+import { FeePlan, Student, FeeRecord } from '../../types';
 import { DonutChart, BarChart } from '../../components/charts/Charts';
 import { downloadCSV } from '../../utils/demoActions';
+import { api } from '../../api/client';
+import { getStoredStudentFees, getStoredStudents } from '../../utils/storage';
 
 export const FeeStructurePage: React.FC = () => {
-  const { navigateTo, showToast } = useApp();
+  const { navigateTo, showToast, activeInstitutionId } = useApp();
   const [activeTab, setActiveTab] = useState<'Fee Structure' | 'Student Fee Assignment' | 'Payments & Invoices' | 'Dues & Reminders' | 'Reports'>('Fee Structure');
-  const [feePlans, setFeePlans] = useState<FeePlan[]>(MOCK_FEE_PLANS);
+  const [feePlans, setFeePlans] = useState<FeePlan[]>([]);
+  const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
+  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(() => getStoredStudentFees());
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -33,6 +35,31 @@ export const FeeStructurePage: React.FC = () => {
     amount: 3000,
     frequency: 'Monthly' as FeePlan['frequency'],
   });
+
+  const loadData = useCallback(async () => {
+    if (!activeInstitutionId) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const [plansRes, stuRes, recordsRes] = await Promise.all([
+        api.fees.getPlans(activeInstitutionId).catch(() => ({ plans: [] as FeePlan[] })),
+        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
+        api.fees.getRecords(activeInstitutionId).catch(() => ({ records: [] as FeeRecord[] }))
+      ]);
+      setFeePlans(plansRes.plans || []);
+      setStudents(stuRes.students || []);
+      setFeeRecords(recordsRes.records || []);
+    } catch (err) {
+      console.error('Error fetching fee data:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load fee plans');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeInstitutionId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const filteredFeePlans = feePlans.filter((p) =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -69,15 +96,18 @@ export const FeeStructurePage: React.FC = () => {
     showToast(`Fee plan "${newPlan.name}" configured successfully!`, 'success');
   };
 
-  const monthlyTrend = [
-    { label: 'Apr', value: 85, color: '#C7D2FE' },
-    { label: 'May', value: 95, color: '#C7D2FE' },
-    { label: 'Jun', value: 110, color: '#C7D2FE' },
-    { label: 'Jul', value: 125, color: '#C7D2FE' },
-    { label: 'Aug', value: 140, color: '#C7D2FE' },
-    { label: 'Sep', value: 155, color: '#C7D2FE' },
-    { label: 'Oct', value: 184, color: '#6366F1' },
-  ];
+  // Calculations
+  const totalCollected = feeRecords
+    .filter((r) => r.status === 'Paid')
+    .reduce((acc, r) => acc + (r.paidAmount || r.totalFees || 0), 0);
+  const pendingAmount = feeRecords
+    .filter((r) => r.status === 'Pending')
+    .reduce((acc, r) => acc + (r.outstandingAmount ?? (r.totalFees - (r.paidAmount || 0))), 0);
+  const overdueAmount = feeRecords
+    .filter((r) => r.status === 'Overdue')
+    .reduce((acc, r) => acc + (r.outstandingAmount ?? (r.totalFees - (r.paidAmount || 0))), 0);
+  const totalBilled = totalCollected + pendingAmount + overdueAmount;
+  const collectionRate = totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 1000) / 10 : 0;
 
   return (
     <div className="page-wrapper">
@@ -99,6 +129,14 @@ export const FeeStructurePage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadData()}>Retry</button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', overflowX: 'auto' }}>
@@ -124,8 +162,8 @@ export const FeeStructurePage: React.FC = () => {
           <div className="stat-icon purple"><CreditCard size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Total Fee Plans</div>
-            <div className="stat-value">{feePlans.length}</div>
-            <div className="stat-footer"><span className="stat-subtext">Active plans</span></div>
+            <div className="stat-value">{isLoading ? '—' : feePlans.length}</div>
+            <div className="stat-footer"><span className="stat-subtext">Configured plans</span></div>
           </div>
         </div>
 
@@ -133,8 +171,8 @@ export const FeeStructurePage: React.FC = () => {
           <div className="stat-icon green"><TrendingUp size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Total Students</div>
-            <div className="stat-value">32</div>
-            <div className="stat-footer"><span className="stat-subtext">With fee assigned</span></div>
+            <div className="stat-value">{isLoading ? '—' : students.length}</div>
+            <div className="stat-footer"><span className="stat-subtext">Enrolled students</span></div>
           </div>
         </div>
 
@@ -142,7 +180,7 @@ export const FeeStructurePage: React.FC = () => {
           <div className="stat-icon orange"><Clock size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Total Expected</div>
-            <div className="stat-value">₹2,40,000</div>
+            <div className="stat-value">{isLoading ? '—' : `₹${totalBilled.toLocaleString('en-IN')}`}</div>
             <div className="stat-footer"><span className="stat-subtext">This academic year</span></div>
           </div>
         </div>
@@ -151,8 +189,8 @@ export const FeeStructurePage: React.FC = () => {
           <div className="stat-icon green"><CheckCircle2 size={22} /></div>
           <div className="stat-content">
             <div className="stat-label">Total Collected</div>
-            <div className="stat-value">₹1,98,500</div>
-            <div className="stat-footer"><span className="stat-badge-change positive">82.7% till date</span></div>
+            <div className="stat-value">{isLoading ? '—' : `₹${totalCollected.toLocaleString('en-IN')}`}</div>
+            <div className="stat-footer"><span className="stat-subtext">{collectionRate}% till date</span></div>
           </div>
         </div>
       </div>
@@ -197,25 +235,41 @@ export const FeeStructurePage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredFeePlans.map((plan, idx) => (
-                    <tr key={plan.id}>
-                      <td><input type="checkbox" /></td>
-                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#EEF2FF', color: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <CreditCard size={15} />
-                          </div>
-                          <span style={{ fontWeight: 700, color: '#0F172A' }}>{plan.name}</span>
+                  {filteredFeePlans.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                        <CreditCard size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                        <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                          No fee plans found
+                        </div>
+                        <div style={{ fontSize: '13px' }}>
+                          {feePlans.length === 0
+                            ? 'No fee plans configured yet. Click "Create Fee Plan" to set up fee structures.'
+                            : 'No fee plans match the current search.'}
                         </div>
                       </td>
-                      <td><span className="badge badge-purple">{plan.type}</span></td>
-                      <td>{plan.classes}</td>
-                      <td><strong>₹{plan.amount.toLocaleString('en-IN')}</strong></td>
-                      <td style={{ color: '#64748B' }}>{plan.frequency}</td>
-                      <td><span className="badge badge-success">{plan.status}</span></td>
                     </tr>
-                  ))}
+                  ) : (
+                    filteredFeePlans.map((plan, idx) => (
+                      <tr key={plan.id}>
+                        <td><input type="checkbox" /></td>
+                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#EEF2FF', color: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <CreditCard size={15} />
+                            </div>
+                            <span style={{ fontWeight: 700, color: '#0F172A' }}>{plan.name}</span>
+                          </div>
+                        </td>
+                        <td><span className="badge badge-purple">{plan.type}</span></td>
+                        <td>{plan.classes}</td>
+                        <td><strong>₹{plan.amount.toLocaleString('en-IN')}</strong></td>
+                        <td style={{ color: '#64748B' }}>{plan.frequency}</td>
+                        <td><span className="badge badge-success">{plan.status}</span></td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -225,21 +279,7 @@ export const FeeStructurePage: React.FC = () => {
         {activeTab === 'Student Fee Assignment' && (
           <div className="card">
             <div style={{ padding: '16px 20px', borderBottom: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div className="card-title">Student Fee Allocations (Class 10)</div>
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  downloadCSV('Student_Fee_Allocations.csv', [
-                    { RollNo: '001', Name: 'Aditya Sharma', Class: 'Class 10 - A', AssignedPlan: 'Comprehensive Foundation (All Subjects)', TotalAnnualFee: '₹36,000', Concession: '0%', NetFee: '₹36,000' },
-                    { RollNo: '002', Name: 'Bhavana Reddy', Class: 'Class 10 - A', AssignedPlan: 'Class 10 CBSE Standard Plan', TotalAnnualFee: '₹30,000', Concession: '10%', NetFee: '₹27,000' },
-                    { RollNo: '003', Name: 'Charan Kumar', Class: 'Class 10 - A', AssignedPlan: 'Class 10 CBSE Standard Plan', TotalAnnualFee: '₹30,000', Concession: '0%', NetFee: '₹30,000' },
-                  ]);
-                  showToast('Exported student fee allocations to CSV', 'success');
-                }}
-              >
-                <Download size={14} />
-                <span>Export CSV</span>
-              </button>
+              <div className="card-title">Student Fee Allocations</div>
             </div>
             <div className="table-container">
               <table className="data-table">
@@ -247,32 +287,38 @@ export const FeeStructurePage: React.FC = () => {
                   <tr>
                     <th>Student</th>
                     <th>Class</th>
-                    <th>Assigned Plan</th>
-                    <th>Annual Fee</th>
-                    <th>Scholarship / Concession</th>
-                    <th>Net Payable</th>
+                    <th>Admission No</th>
+                    <th>Total Annual Fee</th>
+                    <th>Paid</th>
+                    <th>Pending</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[
-                    { name: 'Aditya Sharma', roll: '001', cls: 'Class 10 - A', plan: 'Comprehensive Foundation', fee: '₹36,000', conc: 'None', net: '₹36,000', avatar: MOCK_STUDENTS[0].avatar },
-                    { name: 'Bhavana Reddy', roll: '002', cls: 'Class 10 - A', plan: 'Class 10 CBSE Standard', fee: '₹30,000', conc: '10% Merit', net: '₹27,000', avatar: MOCK_STUDENTS[2].avatar },
-                    { name: 'Charan Kumar', roll: '003', cls: 'Class 10 - A', plan: 'Class 10 CBSE Standard', fee: '₹30,000', conc: 'None', net: '₹30,000', avatar: MOCK_STUDENTS[3].avatar },
-                  ].map((st, i) => (
-                    <tr key={i}>
-                      <td>
-                        <div className="user-table-cell">
-                          <img src={st.avatar} alt={st.name} className="user-table-avatar" />
-                          <span className="user-table-name">{st.name}</span>
-                        </div>
+                  {students.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                        No students enrolled yet.
                       </td>
-                      <td>{st.cls}</td>
-                      <td><span className="badge badge-purple">{st.plan}</span></td>
-                      <td>{st.fee}</td>
-                      <td style={{ color: st.conc !== 'None' ? '#10B981' : '#64748B', fontWeight: 600 }}>{st.conc}</td>
-                      <td style={{ fontWeight: 700, color: '#6366F1' }}>{st.net}</td>
                     </tr>
-                  ))}
+                  ) : (
+                    students.map((st) => (
+                      <tr key={st.id}>
+                        <td>
+                          <div className="user-table-cell">
+                            <img src={st.avatar} alt={st.name} className="user-table-avatar" />
+                            <span className="user-table-name">{st.name}</span>
+                          </div>
+                        </td>
+                        <td>{st.class} - {st.batch}</td>
+                        <td>{st.admissionNo}</td>
+                        <td>₹{(st.fees?.totalFee || 0).toLocaleString('en-IN')}</td>
+                        <td style={{ color: '#10B981', fontWeight: 600 }}>₹{(st.fees?.paidAmount || 0).toLocaleString('en-IN')}</td>
+                        <td style={{ fontWeight: 700, color: (st.fees?.pendingAmount || 0) > 0 ? '#EF4444' : '#64748B' }}>
+                          ₹{(st.fees?.pendingAmount || 0).toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -288,28 +334,47 @@ export const FeeStructurePage: React.FC = () => {
               <div className="card-title">Fee Collection Overview</div>
             </div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
-              <DonutChart value={82.7} size={120} label="82.7%" sublabel="Collection Rate" color="#6366F1" />
+              <DonutChart value={collectionRate} size={120} label={`${collectionRate}%`} sublabel="Collection Rate" color="#6366F1" />
               <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12.5px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981' }} /> Collected</span>
-                  <strong>₹1,98,500</strong>
+                  <strong>₹{totalCollected.toLocaleString('en-IN')}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#F59E0B' }} /> Pending</span>
-                  <strong>₹41,500</strong>
+                  <strong>₹{pendingAmount.toLocaleString('en-IN')}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#EF4444' }} /> Overdue</span>
-                  <strong style={{ color: '#EF4444' }}>₹12,000</strong>
+                  <strong style={{ color: '#EF4444' }}>₹{overdueAmount.toLocaleString('en-IN')}</strong>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Monthly Collection Trend Bar */}
+          {/* Monthly Collection Summary */}
           <div className="card">
-            <div className="card-header"><div className="card-title">Monthly Collection Trend</div></div>
-            <div className="card-body"><BarChart data={monthlyTrend} height={120} valueFormatter={(v) => `₹${v}k`} /></div>
+            <div className="card-header"><div className="card-title">Fee Status Summary</div></div>
+            <div className="card-body" style={{ padding: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #F1F5F9', paddingBottom: '8px' }}>
+                  <span style={{ color: '#64748B' }}>Total Invoices Billed</span>
+                  <strong>{feeRecords.length}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #F1F5F9', paddingBottom: '8px' }}>
+                  <span style={{ color: '#64748B' }}>Paid Invoices</span>
+                  <strong style={{ color: '#10B981' }}>{feeRecords.filter(r => r.status === 'Paid').length}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #F1F5F9', paddingBottom: '8px' }}>
+                  <span style={{ color: '#64748B' }}>Pending Invoices</span>
+                  <strong style={{ color: '#F59E0B' }}>{feeRecords.filter(r => r.status === 'Pending').length}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#64748B' }}>Overdue Invoices</span>
+                  <strong style={{ color: '#EF4444' }}>{feeRecords.filter(r => r.status === 'Overdue').length}</strong>
+                </div>
+              </div>
+            </div>
           </div>
 
         </div>
@@ -331,43 +396,57 @@ export const FeeStructurePage: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Class 10 - Intensive Board Prep"
+                    placeholder="e.g. Class 10 Full Year Tuition"
                     value={newPlan.name}
                     onChange={(e) => setNewPlan({ ...newPlan, name: e.target.value })}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px' }}>
+                <div className="grid-2-col" style={{ gap: '14px' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Plan Type</label>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Fee Type</label>
                     <select
+                      className="select-field"
+                      style={{ width: '100%' }}
                       value={newPlan.type}
-                      onChange={(e) => setNewPlan({ ...newPlan, type: e.target.value as any })}
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                      onChange={(e) => setNewPlan({ ...newPlan, type: e.target.value as FeePlan['type'] })}
                     >
                       <option>Tuition Fee</option>
-                      <option>Special Batch</option>
-                      <option>Subject-wise</option>
-                      <option>Entrance Prep</option>
+                      <option>Admission Fee</option>
+                      <option>Exam Fee</option>
+                      <option>Material / Books</option>
                     </select>
                   </div>
+
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Frequency</label>
                     <select
+                      className="select-field"
+                      style={{ width: '100%' }}
                       value={newPlan.frequency}
-                      onChange={(e) => setNewPlan({ ...newPlan, frequency: e.target.value as any })}
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                      onChange={(e) => setNewPlan({ ...newPlan, frequency: e.target.value as FeePlan['frequency'] })}
                     >
                       <option>Monthly</option>
                       <option>Quarterly</option>
-                      <option>Yearly</option>
                       <option>One-time</option>
+                      <option>Annual</option>
                     </select>
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px' }}>
+                <div className="grid-2-col" style={{ gap: '14px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Target Classes</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Class 10 - A, B"
+                      value={newPlan.classes}
+                      onChange={(e) => setNewPlan({ ...newPlan, classes: e.target.value })}
+                      style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    />
+                  </div>
+
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Amount (₹) *</label>
                     <input
@@ -378,17 +457,9 @@ export const FeeStructurePage: React.FC = () => {
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     />
                   </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Applicable Classes</label>
-                    <input
-                      type="text"
-                      value={newPlan.classes}
-                      onChange={(e) => setNewPlan({ ...newPlan, classes: e.target.value })}
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
-                    />
-                  </div>
                 </div>
               </div>
+
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Create Plan</button>

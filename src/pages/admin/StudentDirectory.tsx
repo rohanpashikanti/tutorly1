@@ -22,7 +22,6 @@ import {
   FileText
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_STUDENTS } from '../../data/mockData';
 import { Student, FeeRecord } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { ParentContactActions } from '../../components/common/ParentContactActions';
@@ -38,6 +37,7 @@ export const StudentDirectory: React.FC = () => {
   const { navigateTo, showToast, activeInstitutionId } = useApp();
   const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState('All Classes');
   const [selectedBatch, setSelectedBatch] = useState('All Batches');
@@ -50,14 +50,20 @@ export const StudentDirectory: React.FC = () => {
   const loadStudents = React.useCallback(async () => {
     if (!activeInstitutionId) return;
     setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await api.students.list(activeInstitutionId);
-      setStudents(res.students);
-      if (res.students.length > 0) {
-        setActiveDrawerStudent((prev) => prev || res.students[0]);
+      const studentList = res.students || [];
+      setStudents(studentList);
+      saveStoredStudents(studentList);
+      if (studentList.length > 0) {
+        setActiveDrawerStudent((prev) => (prev ? studentList.find(s => s.id === prev.id) || studentList[0] : studentList[0]));
+      } else {
+        setActiveDrawerStudent(null);
       }
     } catch (err) {
       console.error('Error fetching students from D1:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load students');
     } finally {
       setIsLoading(false);
     }
@@ -187,6 +193,14 @@ export const StudentDirectory: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadStudents()}>Retry</button>
+        </div>
+      )}
+
       {/* 4 Stat Cards */}
       <div className="stat-grid-4">
         <div className="stat-card">
@@ -195,10 +209,9 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Students</div>
-            <div className="stat-value">248</div>
+            <div className="stat-value">{isLoading ? '—' : students.length}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↑ +12%</span>
-              <span className="stat-subtext">vs last year</span>
+              <span className="stat-subtext">Enrolled in institute</span>
             </div>
           </div>
         </div>
@@ -209,10 +222,9 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Active Students</div>
-            <div className="stat-value">232</div>
+            <div className="stat-value">{isLoading ? '—' : students.filter(s => s.status === 'Active').length}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↑ +8%</span>
-              <span className="stat-subtext">vs last year</span>
+              <span className="stat-subtext">Currently attending</span>
             </div>
           </div>
         </div>
@@ -222,11 +234,10 @@ export const StudentDirectory: React.FC = () => {
             <UserPlus size={22} />
           </div>
           <div className="stat-content">
-            <div className="stat-label">New Enrollments</div>
-            <div className="stat-value">16</div>
+            <div className="stat-label">Classes Represented</div>
+            <div className="stat-value">{isLoading ? '—' : new Set(students.map(s => s.class)).size}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↑ +6%</span>
-              <span className="stat-subtext">this term</span>
+              <span className="stat-subtext">Active grade levels</span>
             </div>
           </div>
         </div>
@@ -237,10 +248,9 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Inactive Students</div>
-            <div className="stat-value">8</div>
+            <div className="stat-value">{isLoading ? '—' : students.filter(s => s.status === 'Inactive').length}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change negative">↓ -4%</span>
-              <span className="stat-subtext">vs last year</span>
+              <span className="stat-subtext">Archived or withdrawn</span>
             </div>
           </div>
         </div>
@@ -327,103 +337,113 @@ export const StudentDirectory: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredStudents.map((student, idx) => {
-                  const isSelected = activeDrawerStudent?.id === student.id;
-                  const isChecked = selectedStudentIds.includes(student.id);
-                  return (
-                    <tr
-                      key={student.id}
-                      onClick={() => setActiveDrawerStudent(student)}
-                      style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
-                    >
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedStudentIds([...selectedStudentIds, student.id]);
-                            } else {
-                              setSelectedStudentIds(selectedStudentIds.filter((id) => id !== student.id));
-                            }
-                          }}
-                        />
-                      </td>
-                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                      <td>
-                        <div className="user-table-cell">
-                          <img src={student.avatar} alt={student.name} className="user-table-avatar" />
+                {filteredStudents.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                      <Users size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                      <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                        No students found
+                      </div>
+                      <div style={{ fontSize: '13px' }}>
+                        {students.length === 0 ? 'No students have been enrolled yet. Click "Add Student" to enroll your first student.' : 'No students match the current search and filter criteria.'}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredStudents.map((student, idx) => {
+                    const isSelected = activeDrawerStudent?.id === student.id;
+                    const isChecked = selectedStudentIds.includes(student.id);
+                    return (
+                      <tr
+                        key={student.id}
+                        onClick={() => setActiveDrawerStudent(student)}
+                        style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
+                      >
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedStudentIds([...selectedStudentIds, student.id]);
+                              } else {
+                                setSelectedStudentIds(selectedStudentIds.filter((id) => id !== student.id));
+                              }
+                            }}
+                          />
+                        </td>
+                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                        <td>
+                          <div className="user-table-cell">
+                            <img src={student.avatar} alt={student.name} className="user-table-avatar" />
+                            <div>
+                              <div className="user-table-name">{student.name}</div>
+                              <div className="user-table-sub">{student.admissionNo}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{student.class}</td>
+                        <td>{student.batch}</td>
+                        <td>
                           <div>
-                            <div className="user-table-name">{student.name}</div>
-                            <div className="user-table-sub">{student.admissionNo}</div>
+                            <div style={{ fontWeight: 600, color: '#0F172A' }}>{student.parent.fatherName}</div>
+                            <div style={{ marginTop: '3px' }}>
+                              <ParentContactActions
+                                phone={student.parent.phone}
+                                parentName={student.parent.fatherName}
+                                studentName={student.name}
+                                size="sm"
+                                showNumber={true}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td>{student.class}</td>
-                      <td>{student.batch}</td>
-                      <td>
-                        <div>
-                          <div style={{ fontWeight: 600, color: '#0F172A' }}>{student.parent.fatherName}</div>
-                          <div style={{ marginTop: '3px' }}>
-                            <ParentContactActions
-                              phone={student.parent.phone}
-                              parentName={student.parent.fatherName}
-                              studentName={student.name}
-                              size="sm"
-                              showNumber={true}
-                            />
+                        </td>
+                        <td>
+                          <span className={`badge ${student.status === 'Active' ? 'badge-success' : 'badge-danger'}`}>
+                            {student.status}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ width: '100px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px', fontWeight: 600, marginBottom: '3px' }}>
+                              <span>{student.attendanceRate}%</span>
+                            </div>
+                            <div style={{ width: '100%', height: '5px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  width: `${student.attendanceRate}%`,
+                                  height: '100%',
+                                  background: student.attendanceRate >= 85 ? '#6366F1' : '#F59E0B',
+                                  borderRadius: '4px',
+                                }}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`badge ${student.status === 'Active' ? 'badge-success' : 'badge-danger'}`}>
-                          {student.status}
-                        </span>
-                      </td>
-                      <td>
-                        <div style={{ width: '100px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px', fontWeight: 600, marginBottom: '3px' }}>
-                            <span>{student.attendanceRate}%</span>
-                          </div>
-                          <div style={{ width: '100%', height: '5px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden' }}>
-                            <div
-                              style={{
-                                width: `${student.attendanceRate}%`,
-                                height: '100%',
-                                background: student.attendanceRate >= 85 ? '#6366F1' : '#F59E0B',
-                                borderRadius: '4px',
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => navigateTo('student-profile', { studentId: student.id })}
-                          style={{ padding: '6px', borderRadius: '6px', color: '#64748B' }}
-                          title="View Profile"
-                        >
-                          <ChevronRight size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => navigateTo('student-profile', { studentId: student.id })}
+                            style={{ padding: '6px', borderRadius: '6px', color: '#64748B' }}
+                            title="View Profile"
+                          >
+                            <ChevronRight size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Pagination Footer */}
           <div style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12.5px', color: '#64748B' }}>
-            <span>Showing 1-8 of 248 students</span>
+            <span>Showing {filteredStudents.length > 0 ? 1 : 0}-{filteredStudents.length} of {filteredStudents.length} students</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <button className="btn btn-sm btn-secondary">‹</button>
+              <button className="btn btn-sm btn-secondary" disabled>‹</button>
               <button className="btn btn-sm btn-primary" style={{ minWidth: '28px', padding: '4px' }}>1</button>
-              <button className="btn btn-sm btn-secondary" style={{ minWidth: '28px', padding: '4px' }}>2</button>
-              <button className="btn btn-sm btn-secondary" style={{ minWidth: '28px', padding: '4px' }}>3</button>
-              <span>...</span>
-              <button className="btn btn-sm btn-secondary" style={{ minWidth: '28px', padding: '4px' }}>31</button>
-              <button className="btn btn-sm btn-secondary">›</button>
+              <button className="btn btn-sm btn-secondary" disabled>›</button>
             </div>
           </div>
         </div>

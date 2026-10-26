@@ -12,7 +12,6 @@ import {
   Layers
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_STUDENTS } from '../../data/mockData';
 import { downloadCSV } from '../../utils/demoActions';
 import { getStoredAttendanceSessions, saveStoredAttendanceSession, AttendanceSession } from '../../utils/storage';
 import { api } from '../../api/client';
@@ -30,18 +29,6 @@ interface StudentAttItem {
   remarks: string;
 }
 
-// Initial roster of students
-const INITIAL_STUDENT_ROSTER: StudentAttItem[] = [
-  { id: 'stu-001', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, className: 'Class 10', batch: 'Batch A', status: 'P', remarks: '' },
-  { id: 'stu-003', name: 'Bhavana Reddy', rollNo: '003', avatar: MOCK_STUDENTS[2].avatar, className: 'Class 10', batch: 'Batch A', status: 'P', remarks: '' },
-  { id: 'stu-005', name: 'Divya Nair', rollNo: '005', avatar: MOCK_STUDENTS[4].avatar, className: 'Class 10', batch: 'Batch A', status: 'P', remarks: '' },
-  { id: 'stu-006', name: 'Harshith Reddy', rollNo: '006', avatar: MOCK_STUDENTS[5].avatar, className: 'Class 9', batch: 'Batch A', status: 'P', remarks: '' },
-  { id: 'stu-002', name: 'Kavya Sharma', rollNo: '002', avatar: MOCK_STUDENTS[1].avatar, className: 'Class 9', batch: 'Batch A', status: 'L', remarks: 'Late by 10 mins' },
-  { id: 'stu-007', name: 'Manish Verma', rollNo: '007', avatar: MOCK_STUDENTS[6].avatar, className: 'Class 9', batch: 'Batch B', status: 'P', remarks: '' },
-  { id: 'stu-004', name: 'Charan Kumar', rollNo: '004', avatar: MOCK_STUDENTS[3].avatar, className: 'Class 8', batch: 'Batch B', status: 'A', remarks: 'Medical leave' },
-  { id: 'stu-008', name: 'Nithya Sree', rollNo: '008', avatar: MOCK_STUDENTS[7].avatar, className: 'Class 8', batch: 'Batch B', status: 'P', remarks: '' },
-];
-
 export const AttendanceRegisterPage: React.FC = () => {
   const { role, showToast, activeInstitutionId } = useApp();
 
@@ -51,12 +38,16 @@ export const AttendanceRegisterPage: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // Attendance Records State
-  const [students, setStudents] = useState<StudentAttItem[]>(INITIAL_STUDENT_ROSTER);
+  const [students, setStudents] = useState<StudentAttItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [attemptedSaveWithIncomplete, setAttemptedSaveWithIncomplete] = useState<boolean>(false);
 
   const loadAttendance = React.useCallback(async () => {
     if (!activeInstitutionId) return;
+    setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await api.attendance.getRegister(activeInstitutionId, {
         date: selectedDate,
@@ -64,7 +55,7 @@ export const AttendanceRegisterPage: React.FC = () => {
         batch: selectedBatch,
       });
 
-      if (res.records && res.records.length > 0) {
+      if (res && res.records) {
         setStudents(
           res.records.map((r) => ({
             id: r.studentId,
@@ -78,9 +69,16 @@ export const AttendanceRegisterPage: React.FC = () => {
           }))
         );
         setIsSaved(res.isSubmitted);
+      } else {
+        setStudents([]);
+        setIsSaved(false);
       }
     } catch (err) {
       console.error('Error fetching attendance from D1:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load attendance');
+      setStudents([]);
+    } finally {
+      setIsLoading(false);
     }
   }, [activeInstitutionId, selectedDate, selectedClass, selectedBatch]);
 
@@ -211,6 +209,14 @@ export const AttendanceRegisterPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadAttendance()}>Retry</button>
+        </div>
+      )}
 
       {/* Primary Selector Bar */}
       <div

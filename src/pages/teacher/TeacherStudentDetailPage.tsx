@@ -11,7 +11,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { getStoredStudents } from '../../utils/storage';
 import { ParentContactActions } from '../../components/common/ParentContactActions';
 
 interface CohortMeta {
@@ -40,11 +40,11 @@ export const TeacherStudentDetailPage: React.FC = () => {
   const { selectedStudentId, selectedBatchId, currentUser, navigateTo } = useApp();
 
   const activeCohort = COHORTS[selectedBatchId] || COHORTS['c10-a'];
-  const student = MOCK_STUDENTS.find((s) => s.id === selectedStudentId);
+  const storedStudents = getStoredStudents();
+  const student = storedStudents.find((s) => s.id === selectedStudentId);
 
   // Authorization Check:
   // Teacher is only authorized to view students enrolled in their assigned classes/cohorts.
-  // currentUser.assignedClasses: ['Class 10 - A', 'Class 10 - B', 'Class 9 - A']
   const isAuthorized = (() => {
     if (!student) return false;
     if (currentUser.role === 'admin') return true; // Admins have system-wide access
@@ -64,8 +64,69 @@ export const TeacherStudentDetailPage: React.FC = () => {
     navigateTo('teacher-classes', { batchId: selectedBatchId });
   };
 
-  // Unauthorized State / Not Found State
-  if (!student || !isAuthorized) {
+  // Not Found State
+  if (!student) {
+    return (
+      <div className="page-container" style={{ maxWidth: '800px', margin: '40px auto', padding: '0 16px' }}>
+        <div
+          className="card"
+          style={{
+            textAlign: 'center',
+            padding: '48px 24px',
+            border: '1px solid #E2E8F0',
+            backgroundColor: '#FFFFFF'
+          }}
+        >
+          <div
+            style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              backgroundColor: '#F1F5F9',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '16px'
+            }}
+          >
+            <User size={36} color="#64748B" />
+          </div>
+          <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#0F172A', margin: '0 0 8px 0' }}>
+            No Student Record Selected
+          </h2>
+          <p
+            style={{
+              fontSize: '14px',
+              color: '#64748B',
+              maxWidth: '520px',
+              margin: '0 auto 24px auto',
+              lineHeight: 1.6
+            }}
+          >
+            Please select an enrolled student from your class roster to view their detailed performance and profile.
+          </p>
+          <div>
+            <button
+              onClick={handleReturn}
+              className="btn btn-primary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 20px',
+                fontWeight: 600
+              }}
+            >
+              <ArrowLeft size={16} /> Return to {activeCohort.name}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Unauthorized State
+  if (!isAuthorized) {
     return (
       <div className="page-container" style={{ maxWidth: '800px', margin: '40px auto', padding: '0 16px' }}>
         <div
@@ -104,7 +165,7 @@ export const TeacherStudentDetailPage: React.FC = () => {
             }}
           >
             You are not authorized to view this student's records. Teachers are strictly restricted
-            to student records within their assigned classes and batches (Class 10 &amp; Class 9).
+            to student records within their assigned classes and batches.
           </p>
           <div>
             <button
@@ -263,7 +324,7 @@ export const TeacherStudentDetailPage: React.FC = () => {
                 Tuition Avg
               </div>
               <div style={{ fontSize: '18px', fontWeight: 800, color: '#4F46E5', marginTop: '2px' }}>
-                {student.academic?.tuitionTestAvg || 82}%
+                {student.academic?.tuitionTestAvg !== undefined ? `${student.academic.tuitionTestAvg}%` : '—'}
               </div>
             </div>
           </div>
@@ -349,13 +410,13 @@ export const TeacherStudentDetailPage: React.FC = () => {
               <div style={{ backgroundColor: '#F8FAFC', padding: '12px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
                 <div style={{ fontSize: '11.5px', color: '#64748B', fontWeight: 600 }}>School Exam Avg</div>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', marginTop: '3px' }}>
-                  {student.academic?.schoolExamAvg || 78}%
+                  {student.academic?.schoolExamAvg !== undefined ? `${student.academic.schoolExamAvg}%` : '—'}
                 </div>
               </div>
               <div style={{ backgroundColor: '#F8FAFC', padding: '12px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
                 <div style={{ fontSize: '11.5px', color: '#64748B', fontWeight: 600 }}>Batch Rank</div>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: '#4F46E5', marginTop: '3px' }}>
-                  #{student.academic?.rank || 3}
+                  {student.academic?.rank !== undefined ? `#${student.academic.rank}` : '—'}
                 </div>
               </div>
             </div>
@@ -365,26 +426,32 @@ export const TeacherStudentDetailPage: React.FC = () => {
                 Subject Scorecard
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {Object.entries(subjectScores).map(([subject, score]) => (
-                  <div key={subject}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
-                      <span style={{ color: '#475569', fontWeight: 500 }}>{subject}</span>
-                      <span style={{ fontWeight: 700, color: (score as number) >= 80 ? '#16A34A' : '#D97706' }}>
-                        {score} / 100
-                      </span>
-                    </div>
-                    <div style={{ height: '6px', backgroundColor: '#F1F5F9', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          height: '100%',
-                          width: `${score}%`,
-                          backgroundColor: (score as number) >= 80 ? '#22C55E' : '#EAB308',
-                          borderRadius: '3px'
-                        }}
-                      />
-                    </div>
+                {Object.entries(subjectScores).length === 0 ? (
+                  <div style={{ fontSize: '12px', color: '#64748B', fontStyle: 'italic', padding: '8px 0' }}>
+                    No subject exam marks entered yet.
                   </div>
-                ))}
+                ) : (
+                  Object.entries(subjectScores).map(([subject, score]) => (
+                    <div key={subject}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '3px' }}>
+                        <span style={{ color: '#475569', fontWeight: 500 }}>{subject}</span>
+                        <span style={{ fontWeight: 700, color: (score as number) >= 80 ? '#16A34A' : '#D97706' }}>
+                          {score} / 100
+                        </span>
+                      </div>
+                      <div style={{ height: '6px', backgroundColor: '#F1F5F9', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            height: '100%',
+                            width: `${score}%`,
+                            backgroundColor: (score as number) >= 80 ? '#22C55E' : '#EAB308',
+                            borderRadius: '3px'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -403,17 +470,17 @@ export const TeacherStudentDetailPage: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F8FAFC', padding: '12px 16px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
               <div>
                 <div style={{ fontSize: '12px', color: '#64748B' }}>Cumulative Attendance</div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: student.attendanceRate >= 85 ? '#15803D' : '#D97706' }}>
-                  {student.attendanceRate}%
+                <div style={{ fontSize: '20px', fontWeight: 800, color: (student.attendanceRate || 0) >= 85 ? '#15803D' : '#D97706' }}>
+                  {student.attendanceRate || 0}%
                 </div>
               </div>
-              <span className={`badge ${student.attendanceRate >= 85 ? 'badge-success' : 'badge-warning'}`}>
-                {student.attendanceRate >= 85 ? 'Regular' : 'Borderline'}
+              <span className={`badge ${(student.attendanceRate || 0) >= 85 ? 'badge-success' : 'badge-warning'}`}>
+                {(student.attendanceRate || 0) >= 85 ? 'Regular' : 'Borderline'}
               </span>
             </div>
 
             <div style={{ fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
-              This student has attended <strong>{Math.round((student.attendanceRate / 100) * 48)}</strong> out of 48 sessions conducted in this academic term.
+              Attendance rate: <strong>{student.attendanceRate || 0}%</strong> recorded for this student.
             </div>
 
             <div style={{ display: 'flex', gap: '8px', paddingTop: '4px' }}>

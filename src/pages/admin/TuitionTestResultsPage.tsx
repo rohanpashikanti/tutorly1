@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BarChart } from '../../components/charts/Charts';
-import { MOCK_STUDENTS } from '../../data/mockData';
+import { getStoredStudents } from '../../utils/storage';
 import { downloadCSV } from '../../utils/demoActions';
 
 export const TuitionTestResultsPage: React.FC = () => {
@@ -21,24 +21,25 @@ export const TuitionTestResultsPage: React.FC = () => {
   const [selectedSubject, setSelectedSubject] = useState('Physics');
 
   const scoreDist = [
-    { label: 'A+', value: 8, color: '#A7F3D0' },
-    { label: 'A', value: 7, color: '#BFDBFE' },
-    { label: 'B+', value: 6, color: '#FDE68A' },
-    { label: 'B', value: 4, color: '#FDBA74' },
-    { label: 'C', value: 2, color: '#FCA5A5' },
-    { label: 'D', value: 1, color: '#F87171' },
+    { label: 'A+', value: 0, color: '#A7F3D0' },
+    { label: 'A', value: 0, color: '#BFDBFE' },
+    { label: 'B+', value: 0, color: '#FDE68A' },
+    { label: 'B', value: 0, color: '#FDBA74' },
+    { label: 'C', value: 0, color: '#FCA5A5' },
+    { label: 'D', value: 0, color: '#F87171' },
   ];
 
-  const resultsList = [
-    { id: '1', name: 'Aditya Sharma', rollNo: '001', avatar: MOCK_STUDENTS[0].avatar, marks: 96, pct: 96, grade: 'A+', rank: 1, result: 'Passed' },
-    { id: '2', name: 'Kavya Sri', rollNo: '006', avatar: MOCK_STUDENTS[1].avatar, marks: 91, pct: 91, grade: 'A+', rank: 2, result: 'Passed' },
-    { id: '3', name: 'Bhavana Reddy', rollNo: '002', avatar: MOCK_STUDENTS[2].avatar, marks: 88, pct: 88, grade: 'A', rank: 3, result: 'Passed' },
-    { id: '4', name: 'Divya Nair', rollNo: '004', avatar: MOCK_STUDENTS[4].avatar, marks: 85, pct: 85, grade: 'A', rank: 4, result: 'Passed' },
-    { id: '5', name: 'Charan Kumar', rollNo: '003', avatar: MOCK_STUDENTS[3].avatar, marks: 72, pct: 72, grade: 'B+', rank: 5, result: 'Passed' },
-    { id: '6', name: 'Harshith Reddy', rollNo: '005', avatar: MOCK_STUDENTS[5].avatar, marks: 67, pct: 67, grade: 'B', rank: 6, result: 'Passed' },
-    { id: '7', name: 'Nithya Sree', rollNo: '008', avatar: MOCK_STUDENTS[7].avatar, marks: 78, pct: 78, grade: 'B+', rank: 7, result: 'Passed' },
-    { id: '8', name: 'Manish Verma', rollNo: '007', avatar: MOCK_STUDENTS[6].avatar, marks: 42, pct: 42, grade: 'C', rank: 8, result: 'Failed' },
-  ];
+  const resultsList = getStoredStudents().map((st, idx) => ({
+    id: st.id,
+    name: st.name,
+    rollNo: st.rollNo,
+    avatar: st.avatar,
+    marks: 0,
+    pct: 0,
+    grade: '—',
+    rank: idx + 1,
+    result: 'Pending'
+  }));
 
   const handleExportCSV = () => {
     const data = resultsList.map((st) => ({

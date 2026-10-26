@@ -117,10 +117,10 @@ studentsRouter.get('/:institutionId/students', async (c) => {
   // Map to frontend Student model
   let students = rawStudents.results.map((s, index) => {
     const fullName = `${s.first_name} ${s.last_name || ''}`.trim();
-    const attendanceRate = attendanceMap.get(s.id) ?? 92;
+    const attendanceRate = attendanceMap.get(s.id) ?? 0;
     const feeInfo = feesMap.get(s.id) ?? {
-      total: 36000,
-      paid: 36000,
+      total: 0,
+      paid: 0,
       pending: 0,
       nextDue: '—',
       status: 'Paid' as const,
@@ -128,7 +128,7 @@ studentsRouter.get('/:institutionId/students', async (c) => {
 
     let mappedStatus: 'Active' | 'Inactive' | 'Needs Attention' = 'Active';
     if (s.status === 'inactive' || s.status === 'withdrawn') mappedStatus = 'Inactive';
-    else if (s.status === 'needs_attention' || attendanceRate < 75 || feeInfo.status === 'Overdue') {
+    else if (s.status === 'needs_attention' || (attendanceMap.has(s.id) && attendanceRate < 75) || feeInfo.status === 'Overdue') {
       mappedStatus = 'Needs Attention';
     }
 
@@ -141,15 +141,15 @@ studentsRouter.get('/:institutionId/students', async (c) => {
         s.avatar_url ||
         `https://images.unsplash.com/photo-${1535713875002 + (index % 10)}?w=150&auto=format&fit=crop&q=80`,
       gender: (s.gender as 'Male' | 'Female' | 'Other') || 'Male',
-      dob: s.date_of_birth || '2010-05-15',
-      age: s.date_of_birth ? new Date().getFullYear() - parseInt(s.date_of_birth.slice(0, 4), 10) : 15,
+      dob: s.date_of_birth || '',
+      age: s.date_of_birth ? new Date().getFullYear() - parseInt(s.date_of_birth.slice(0, 4), 10) : 0,
       class: s.class_name || 'Class 10',
       batch: s.batch_name || 'Batch A',
-      admissionDate: s.admission_date || '2026-04-01',
+      admissionDate: s.admission_date || '',
       status: mappedStatus,
       attendanceRate,
       attendancePercentage: attendanceRate,
-      averageScore: 82,
+      averageScore: 0,
       parentName: s.guardian_name || 'Guardian',
       parentPhone: s.guardian_phone || s.phone || '',
       parent: {
@@ -159,16 +159,11 @@ studentsRouter.get('/:institutionId/students', async (c) => {
         address: s.guardian_address || s.address || '',
       },
       academic: {
-        schoolExamAvg: 80,
-        tuitionTestAvg: 85,
-        pendingHomework: 1,
+        schoolExamAvg: 0,
+        tuitionTestAvg: 0,
+        pendingHomework: 0,
         rank: index + 1,
-        subjectScores: {
-          Mathematics: 88,
-          Science: 84,
-          English: 80,
-          'Social Studies': 78,
-        },
+        subjectScores: {},
       },
       fees: {
         totalFee: feeInfo.total,

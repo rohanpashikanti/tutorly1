@@ -16,15 +16,17 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { MOCK_TEACHERS } from '../../data/mockData';
 import { Teacher } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { Download } from 'lucide-react';
 import { api } from '../../api/client';
+import { getStoredTeachers, saveStoredTeachers } from '../../utils/storage';
 
 export const TeacherManagement: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
-  const [teachers, setTeachers] = useState<Teacher[]>(MOCK_TEACHERS);
+  const [teachers, setTeachers] = useState<Teacher[]>(() => getStoredTeachers());
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeDrawerTeacher, setActiveDrawerTeacher] = useState<Teacher | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -33,14 +35,23 @@ export const TeacherManagement: React.FC = () => {
 
   const loadTeachers = React.useCallback(async () => {
     if (!activeInstitutionId) return;
+    setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await api.teachers.list(activeInstitutionId);
-      if (res.teachers && res.teachers.length > 0) {
-        setTeachers(res.teachers);
-        setActiveDrawerTeacher((prev) => prev || res.teachers[0]);
+      const list = res.teachers || [];
+      setTeachers(list);
+      saveStoredTeachers(list);
+      if (list.length > 0) {
+        setActiveDrawerTeacher((prev) => (prev ? list.find((t) => t.id === prev.id) || list[0] : list[0]));
+      } else {
+        setActiveDrawerTeacher(null);
       }
     } catch (err) {
       console.error('Error fetching teachers from D1:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load teachers');
+    } finally {
+      setIsLoading(false);
     }
   }, [activeInstitutionId]);
 
@@ -188,6 +199,14 @@ export const TeacherManagement: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Banner */}
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', color: '#991B1B', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{loadError}</span>
+          <button className="btn btn-sm btn-secondary" onClick={() => void loadTeachers()}>Retry</button>
+        </div>
+      )}
+
       {/* 4 Stat Cards */}
       <div className="stat-grid-4">
         <div className="stat-card">
@@ -196,10 +215,9 @@ export const TeacherManagement: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Teachers</div>
-            <div className="stat-value">12</div>
+            <div className="stat-value">{isLoading ? '—' : teachers.length}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↑ +2</span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">Onboarded faculty</span>
             </div>
           </div>
         </div>
@@ -210,10 +228,9 @@ export const TeacherManagement: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Active Teachers</div>
-            <div className="stat-value">10</div>
+            <div className="stat-value">{isLoading ? '—' : teachers.filter(t => t.status === 'Active').length}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">↑ +11%</span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">Currently assigned</span>
             </div>
           </div>
         </div>
@@ -224,7 +241,7 @@ export const TeacherManagement: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Classes Assigned</div>
-            <div className="stat-value">28</div>
+            <div className="stat-value">{isLoading ? '—' : teachers.reduce((acc, t) => acc + (t.classes?.length || 0), 0)}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Across all teachers</span>
             </div>
@@ -237,7 +254,7 @@ export const TeacherManagement: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Subjects Covered</div>
-            <div className="stat-value">8</div>
+            <div className="stat-value">{isLoading ? '—' : new Set(teachers.flatMap(t => t.subjects || [])).size}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Across all teachers</span>
             </div>
@@ -294,61 +311,75 @@ export const TeacherManagement: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredTeachers.map((teacher, idx) => {
-                  const isSelected = activeDrawerTeacher?.id === teacher.id;
-                  const isChecked = selectedTeacherIds.includes(teacher.id);
-                  return (
-                    <tr
-                      key={teacher.id}
-                      onClick={() => setActiveDrawerTeacher(teacher)}
-                      style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
-                    >
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => handleToggleSelect(teacher.id)}
-                        />
-                      </td>
-                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                      <td>
-                        <div className="user-table-cell">
-                          <img src={teacher.avatar} alt={teacher.name} className="user-table-avatar" />
-                          <div>
-                            <div className="user-table-name">{teacher.name}</div>
-                            <div className="user-table-sub">{teacher.code}</div>
+                {filteredTeachers.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '48px 20px', color: '#64748B' }}>
+                      <Users size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                      <div style={{ fontWeight: 600, fontSize: '15px', color: '#1E293B', marginBottom: '4px' }}>
+                        No teachers found
+                      </div>
+                      <div style={{ fontSize: '13px' }}>
+                        {teachers.length === 0 ? 'No faculty members onboarded yet. Click "Add Teacher" to add your first faculty member.' : 'No teachers match the search criteria.'}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredTeachers.map((teacher, idx) => {
+                    const isSelected = activeDrawerTeacher?.id === teacher.id;
+                    const isChecked = selectedTeacherIds.includes(teacher.id);
+                    return (
+                      <tr
+                        key={teacher.id}
+                        onClick={() => setActiveDrawerTeacher(teacher)}
+                        style={{ cursor: 'pointer', backgroundColor: isSelected ? '#F5F3FF' : undefined }}
+                      >
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleSelect(teacher.id)}
+                          />
+                        </td>
+                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                        <td>
+                          <div className="user-table-cell">
+                            <img src={teacher.avatar} alt={teacher.name} className="user-table-avatar" />
+                            <div>
+                              <div className="user-table-name">{teacher.name}</div>
+                              <div className="user-table-sub">{teacher.code}</div>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                          {teacher.subjects.map((s, i) => (
-                            <span key={i} className="badge badge-purple" style={{ fontSize: '11px' }}>{s}</span>
-                          ))}
-                        </div>
-                      </td>
-                      <td>
-                        <div style={{ fontSize: '12.5px', color: '#475569' }}>
-                          {teacher.classes.join(', ')}
-                        </div>
-                      </td>
-                      <td>
-                        <div style={{ fontSize: '12px' }}>
-                          <div style={{ fontWeight: 500 }}>{teacher.phone}</div>
-                          <div style={{ color: '#64748B' }}>{teacher.email}</div>
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`badge ${teacher.status === 'Active' ? 'badge-success' : 'badge-danger'}`}>
-                          {teacher.status}
-                        </span>
-                      </td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <ChevronRight size={16} color="#94A3B8" />
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                            {teacher.subjects.map((s, i) => (
+                              <span key={i} className="badge badge-purple" style={{ fontSize: '11px' }}>{s}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ fontSize: '12.5px', color: '#475569' }}>
+                            {teacher.classes.join(', ')}
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ fontSize: '12px' }}>
+                            <div style={{ fontWeight: 500 }}>{teacher.phone}</div>
+                            <div style={{ color: '#64748B' }}>{teacher.email}</div>
+                          </div>
+                        </td>
+                        <td>
+                          <span className={`badge ${teacher.status === 'Active' ? 'badge-success' : 'badge-danger'}`}>
+                            {teacher.status}
+                          </span>
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <ChevronRight size={16} color="#94A3B8" />
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

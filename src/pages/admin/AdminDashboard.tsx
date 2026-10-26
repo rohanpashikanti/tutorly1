@@ -43,77 +43,59 @@ export const AdminDashboard: React.FC = () => {
     monthlyCollections: any[];
   } | null>(null);
 
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (!activeInstitutionId) return;
+    if (!activeInstitutionId) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    setLoadError(null);
     api.dashboard.getSummary(activeInstitutionId)
-      .then((res) => setSummary(res))
-      .catch((err) => console.error('Dashboard load error:', err));
-  }, [activeInstitutionId]);
+      .then((res) => {
+        setSummary(res);
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : 'Dashboard load failed';
+        console.error('Dashboard load error:', err);
+        setLoadError(msg);
+        showToast(msg, 'error');
+      })
+      .finally(() => setIsLoading(false));
+  }, [activeInstitutionId, showToast]);
 
-  // Trend data for Student Performance Overview
-  const performanceData = performanceFilter === 'Yearly'
-    ? [
-        { label: '2024', line1: 65, bar: 60 },
-        { label: '2025', line1: 72, bar: 68 },
-        { label: '2026', line1: 79, bar: 76 }
-      ]
-    : performanceFilter === 'Term'
-    ? [
-        { label: 'Term 1 Unit 1', line1: 70, bar: 65 },
-        { label: 'Term 1 Mid', line1: 74, bar: 70 },
-        { label: 'Term 1 Final', line1: 79, bar: 76 },
-        { label: 'Term 2 Unit 1', line1: 82, bar: 78 }
-      ]
-    : [
-        { label: 'Jan', line1: 68, bar: 60 },
-        { label: 'Feb', line1: 72, bar: 65 },
-        { label: 'Mar', line1: 66, bar: 62 },
-        { label: 'Apr', line1: 64, bar: 60 },
-        { label: 'May', line1: 70, bar: 68 },
-        { label: 'Jun', line1: 78, bar: 74 },
-        { label: 'Jul', line1: 72, bar: 70 },
-        { label: 'Aug', line1: 75, bar: 72 },
-        { label: 'Sep', line1: 73, bar: 70 },
-        { label: 'Oct', line1: 79, bar: 76 },
-      ];
-
-  // Fee collection display metrics
-  const feeInfo = feePeriod === 'Last Month'
-    ? { amount: '₹1,55,000', change: '+14%', subtext: 'Total collected in September 2026' }
-    : feePeriod === 'This Term'
-    ? { amount: '₹4,49,500', change: '+22%', subtext: 'Total collected in Term 1 (Apr - Oct 2026)' }
-    : { amount: summary ? `₹${summary.stats.currentMonthFees.toLocaleString('en-IN')}` : '₹1,84,500', change: '+18%', subtext: 'Total collected in October 2026' };
-
-  // Monthly collection data
-  const feeBarData = feePeriod === 'Last Month'
-    ? [
-        { label: 'Apr', value: 85, color: '#C7D2FE' },
-        { label: 'May', value: 95, color: '#C7D2FE' },
-        { label: 'Jun', value: 110, color: '#C7D2FE' },
-        { label: 'Jul', value: 125, color: '#C7D2FE' },
-        { label: 'Aug', value: 140, color: '#C7D2FE' },
-        { label: 'Sep', value: 155, color: '#6366F1' },
-      ]
-    : [
-        { label: 'Apr', value: 85, color: '#C7D2FE' },
-        { label: 'May', value: 95, color: '#C7D2FE' },
-        { label: 'Jun', value: 110, color: '#C7D2FE' },
-        { label: 'Jul', value: 125, color: '#C7D2FE' },
-        { label: 'Aug', value: 140, color: '#C7D2FE' },
-        { label: 'Sep', value: 155, color: '#C7D2FE' },
-        { label: 'Oct', value: 184.5, color: '#6366F1' },
-      ];
-
-  const totalStudentsDisplay = summary ? summary.stats.totalStudents : 248;
-  const totalTeachersDisplay = summary ? summary.stats.totalTeachers : 12;
-  const totalClassesDisplay = summary ? summary.stats.totalClasses + summary.stats.totalBatches : 14;
-  const attendanceRateDisplay = summary ? `${summary.stats.todayAttendanceRate}%` : '92%';
-  const attendanceSubtextDisplay = summary
+  const totalStudentsDisplay = summary?.stats ? summary.stats.totalStudents : 0;
+  const totalTeachersDisplay = summary?.stats ? summary.stats.totalTeachers : 0;
+  const totalClassesDisplay = summary?.stats ? summary.stats.totalClasses + summary.stats.totalBatches : 0;
+  const totalMarkedToday = summary?.stats ? summary.stats.todayPresentCount + summary.stats.todayAbsentCount : 0;
+  const attendanceRateDisplay = totalMarkedToday > 0 && summary ? `${summary.stats.todayAttendanceRate}%` : '0%';
+  const attendanceSubtextDisplay = totalMarkedToday > 0 && summary
     ? `${summary.stats.todayPresentCount} Present | ${summary.stats.todayAbsentCount} Absent`
-    : '228 Present | 20 Absent';
+    : 'No sessions marked today';
+
+  const currentMonthRupees = summary?.stats ? summary.stats.currentMonthFees : 0;
+  const feeInfo = {
+    amount: `₹${currentMonthRupees.toLocaleString('en-IN')}`,
+    subtext: 'Total collected this month',
+  };
+
+  const monthlyTrendData = (summary?.monthlyCollections || []).map((m: any) => ({
+    label: m.month_key || m.month || 'Month',
+    value: Math.round(((m.paise ?? (m.amount ? m.amount * 100 : 0)) / 100) / 1000),
+    color: '#6366F1',
+  }));
 
   return (
     <div className="page-wrapper">
+      {loadError && (
+        <div style={{ padding: '12px 16px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', marginBottom: '16px', color: '#991B1B', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Error loading dashboard metrics: {loadError}</span>
+          <button className="btn btn-sm btn-outline" onClick={() => window.location.reload()}>Retry</button>
+        </div>
+      )}
+
       {/* 5 Top Stat Cards */}
       <div className="stat-grid-5">
         <div className="stat-card" onClick={() => navigateTo('student-directory')} style={{ cursor: 'pointer' }}>
@@ -122,12 +104,9 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Students</div>
-            <div className="stat-value">{totalStudentsDisplay}</div>
+            <div className="stat-value">{isLoading ? '—' : totalStudentsDisplay}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">
-                <ArrowUpRight size={13} /> +12%
-              </span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">Active enrollment</span>
             </div>
           </div>
         </div>
@@ -138,12 +117,9 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Teachers</div>
-            <div className="stat-value">{totalTeachersDisplay}</div>
+            <div className="stat-value">{isLoading ? '—' : totalTeachersDisplay}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">
-                <ArrowUpRight size={13} /> +2
-              </span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">Teaching faculty</span>
             </div>
           </div>
         </div>
@@ -154,10 +130,10 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Classes & Batches</div>
-            <div className="stat-value">{totalClassesDisplay}</div>
+            <div className="stat-value">{isLoading ? '—' : totalClassesDisplay}</div>
             <div className="stat-footer">
               <span className="stat-subtext">
-                {summary ? `${summary.stats.totalClasses} Classes • ${summary.stats.totalBatches} Batches` : '8 Classes • 14 Batches'}
+                {summary ? `${summary.stats.totalClasses} Classes • ${summary.stats.totalBatches} Batches` : '0 Classes • 0 Batches'}
               </span>
             </div>
           </div>
@@ -169,7 +145,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Today's Attendance</div>
-            <div className="stat-value">{attendanceRateDisplay}</div>
+            <div className="stat-value">{isLoading ? '—' : attendanceRateDisplay}</div>
             <div className="stat-footer">
               <span className="stat-subtext">{attendanceSubtextDisplay}</span>
             </div>
@@ -181,13 +157,10 @@ export const AdminDashboard: React.FC = () => {
             <Wallet size={22} />
           </div>
           <div className="stat-content">
-            <div className="stat-label">Fees Collected (Oct)</div>
-            <div className="stat-value">{feeInfo.amount}</div>
+            <div className="stat-label">Fees Collected</div>
+            <div className="stat-value">{isLoading ? '—' : feeInfo.amount}</div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">
-                <ArrowUpRight size={13} /> +18%
-              </span>
-              <span className="stat-subtext">vs last month</span>
+              <span className="stat-subtext">{feeInfo.subtext}</span>
             </div>
           </div>
         </div>
@@ -231,20 +204,11 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="card-body">
-            <LineTrendChart
-              data={performanceData}
-              height={190}
-              line1Label="Tuition Tests (Avg)"
-              barLabel="School Exams (Avg)"
-            />
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '12px', fontSize: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#6366F1' }} />
-                <span style={{ color: '#475569', fontWeight: 500 }}>Tuition Tests (Avg)</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ width: '10px', height: '10px', borderRadius: '2px', background: '#EEF2FF', border: '1px solid #C7D2FE' }} />
-                <span style={{ color: '#475569', fontWeight: 500 }}>School Exams (Avg)</span>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '190px', textAlign: 'center', color: '#64748B' }}>
+              <BookOpen size={36} color="#CBD5E1" style={{ marginBottom: '10px' }} />
+              <div style={{ fontWeight: 600, color: '#334155', fontSize: '13px' }}>No performance scores recorded yet</div>
+              <div style={{ fontSize: '11.5px', maxWidth: '320px', marginTop: '4px' }}>
+                Subject scores and performance trends will appear once tests or examinations are evaluated.
               </div>
             </div>
           </div>
@@ -257,10 +221,10 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
             <DonutChart
-              value={92}
+              value={totalMarkedToday > 0 && summary ? summary.stats.todayAttendanceRate : 0}
               size={130}
               strokeWidth={14}
-              label="92%"
+              label={totalMarkedToday > 0 && summary ? `${summary.stats.todayAttendanceRate}%` : '0%'}
               sublabel="Present"
               color="#6366F1"
             />
@@ -270,25 +234,27 @@ export const AdminDashboard: React.FC = () => {
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
                   <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981' }} /> Present
                 </span>
-                <strong style={{ color: '#0F172A' }}>228</strong>
+                <strong style={{ color: '#0F172A' }}>{summary ? summary.stats.todayPresentCount : 0}</strong>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
                   <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#EF4444' }} /> Absent
                 </span>
-                <strong style={{ color: '#0F172A' }}>20</strong>
+                <strong style={{ color: '#0F172A' }}>{summary ? summary.stats.todayAbsentCount : 0}</strong>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
                   <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#F59E0B' }} /> Late
                 </span>
-                <strong style={{ color: '#0F172A' }}>6</strong>
+                <strong style={{ color: '#0F172A' }}>0</strong>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
                   <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#94A3B8' }} /> Not Marked
                 </span>
-                <strong style={{ color: '#0F172A' }}>2</strong>
+                <strong style={{ color: '#0F172A' }}>
+                  {summary ? Math.max(0, summary.stats.totalStudents - totalMarkedToday) : 0}
+                </strong>
               </div>
             </div>
 
@@ -314,75 +280,36 @@ export const AdminDashboard: React.FC = () => {
             </button>
           </div>
           <div className="card-body" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px', borderRadius: '8px', background: '#F8FAFC' }}>
-              <div style={{ textAlign: 'center', minWidth: '36px' }}>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', lineHeight: 1 }}>22</div>
-                <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748B' }}>OCT</div>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                  <span className="badge badge-info" style={{ fontSize: '10px', padding: '1px 6px' }}>School Exam</span>
+            {summary?.upcomingEvents && summary.upcomingEvents.length > 0 ? (
+              summary.upcomingEvents.map((evt: any) => (
+                <div key={evt.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px', borderRadius: '8px', background: '#F8FAFC' }}>
+                  <div style={{ textAlign: 'center', minWidth: '36px' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', lineHeight: 1 }}>
+                      {evt.starts_at ? new Date(evt.starts_at).getDate() : '—'}
+                    </div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748B' }}>
+                      {evt.starts_at ? new Date(evt.starts_at).toLocaleString('en', { month: 'short' }).toUpperCase() : ''}
+                    </div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                      <span className="badge badge-info" style={{ fontSize: '10px', padding: '1px 6px' }}>{evt.event_type || 'Event'}</span>
+                    </div>
+                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {evt.title}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#64748B' }}>{evt.description || 'Calendar Event'}</div>
+                  </div>
+                  <ChevronRight size={16} color="#94A3B8" />
                 </div>
-                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Half Yearly Examination
-                </div>
-                <div style={{ fontSize: '11px', color: '#64748B' }}>Class 10 • Mathematics • 9:00 AM</div>
+              ))
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 10px', textAlign: 'center', color: '#64748B' }}>
+                <CalendarCheck size={32} color="#CBD5E1" style={{ marginBottom: '8px' }} />
+                <div style={{ fontWeight: 600, color: '#334155', fontSize: '13px' }}>No upcoming events scheduled</div>
+                <div style={{ fontSize: '11px', marginTop: '4px' }}>Add tests, holidays, or meetings in the academic calendar.</div>
               </div>
-              <ChevronRight size={16} color="#94A3B8" />
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px', borderRadius: '8px', background: '#F8FAFC' }}>
-              <div style={{ textAlign: 'center', minWidth: '36px' }}>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', lineHeight: 1 }}>24</div>
-                <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748B' }}>OCT</div>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                  <span className="badge badge-purple" style={{ fontSize: '10px', padding: '1px 6px' }}>Tuition Test</span>
-                </div>
-                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Monthly Test
-                </div>
-                <div style={{ fontSize: '11px', color: '#64748B' }}>Class 8 • Science • 10:00 AM</div>
-              </div>
-              <ChevronRight size={16} color="#94A3B8" />
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px', borderRadius: '8px', background: '#F8FAFC' }}>
-              <div style={{ textAlign: 'center', minWidth: '36px' }}>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', lineHeight: 1 }}>27</div>
-                <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748B' }}>OCT</div>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                  <span className="badge badge-info" style={{ fontSize: '10px', padding: '1px 6px' }}>School Exam</span>
-                </div>
-                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Unit Test 2
-                </div>
-                <div style={{ fontSize: '11px', color: '#64748B' }}>Class 9 • English • 9:00 AM</div>
-              </div>
-              <ChevronRight size={16} color="#94A3B8" />
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px', borderRadius: '8px', background: '#F8FAFC' }}>
-              <div style={{ textAlign: 'center', minWidth: '36px' }}>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', lineHeight: 1 }}>30</div>
-                <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748B' }}>OCT</div>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                  <span className="badge badge-purple" style={{ fontSize: '10px', padding: '1px 6px' }}>Tuition Test</span>
-                </div>
-                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Chapter Test - Acids & Bases
-                </div>
-                <div style={{ fontSize: '11px', color: '#64748B' }}>Class 10 • Science • 4:00 PM</div>
-              </div>
-              <ChevronRight size={16} color="#94A3B8" />
-            </div>
-
+            )}
           </div>
         </div>
 
@@ -398,7 +325,6 @@ export const AdminDashboard: React.FC = () => {
               <div className="card-title">Fee Collection</div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '4px' }}>
                 <span style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A' }}>{feeInfo.amount}</span>
-                <span style={{ fontSize: '12px', fontWeight: 700, color: '#10B981' }}>↑ {feeInfo.change}</span>
               </div>
               <div style={{ fontSize: '11px', color: '#64748B' }}>{feeInfo.subtext}</div>
             </div>
@@ -414,11 +340,19 @@ export const AdminDashboard: React.FC = () => {
             </select>
           </div>
           <div className="card-body">
-            <BarChart
-              data={feeBarData}
-              height={140}
-              valueFormatter={(v) => `₹${v}k`}
-            />
+            {monthlyTrendData.length > 0 ? (
+              <BarChart
+                data={monthlyTrendData}
+                height={140}
+                valueFormatter={(v) => `₹${v}k`}
+              />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '140px', textAlign: 'center', color: '#64748B' }}>
+                <CreditCard size={32} color="#CBD5E1" style={{ marginBottom: '6px' }} />
+                <div style={{ fontWeight: 600, color: '#334155', fontSize: '12.5px' }}>No fee collections recorded yet</div>
+                <div style={{ fontSize: '11px', marginTop: '2px' }}>Recorded payments will display monthly revenue trends here.</div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -434,59 +368,11 @@ export const AdminDashboard: React.FC = () => {
             </button>
           </div>
           <div className="card-body" style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#ECFDF5', color: '#10B981', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <CreditCard size={16} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>Fee payment received</div>
-                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>2h ago</span>
-                </div>
-                <div style={{ fontSize: '12px', color: '#64748B' }}>Rohan Verma • ₹2,500</div>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 10px', textAlign: 'center', color: '#64748B' }}>
+              <Clock size={32} color="#CBD5E1" style={{ marginBottom: '8px' }} />
+              <div style={{ fontWeight: 600, color: '#334155', fontSize: '13px' }}>No recent activity logged</div>
+              <div style={{ fontSize: '11px', marginTop: '4px' }}>Actions such as enrollment, payments, and marks will show here.</div>
             </div>
-
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#FFFBEB', color: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <FileCheck size={16} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>Marks added for Monthly Test</div>
-                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>4h ago</span>
-                </div>
-                <div style={{ fontSize: '12px', color: '#64748B' }}>Class 8 • Science</div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#EEF2FF', color: '#6366F1', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <UserPlus size={16} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>New student enrolled</div>
-                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>6h ago</span>
-                </div>
-                <div style={{ fontSize: '12px', color: '#64748B' }}>Ananya Reddy • Class 9</div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#FDF2F8', color: '#EC4899', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <BookOpen size={16} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A' }}>Homework assigned</div>
-                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>8h ago</span>
-                </div>
-                <div style={{ fontSize: '12px', color: '#64748B' }}>Class 10 • Mathematics</div>
-              </div>
-            </div>
-
           </div>
         </div>
 

@@ -24,7 +24,6 @@ import {
   getStoredTuitionTestMarks,
   getStoredStudentFees
 } from '../../utils/storage';
-import { MOCK_STUDENTS } from '../../data/mockData';
 
 type ReportCategory = 'student' | 'attendance' | 'school-exam' | 'tuition-test' | 'fees';
 
@@ -40,48 +39,74 @@ export const ReportsCenterPage: React.FC = () => {
   const tuitionTests = getStoredTuitionTests();
   const tuitionTestMarks = getStoredTuitionTestMarks();
   const studentFees = getStoredStudentFees();
+  const activeSchoolExam = schoolExams[0]?.name || 'All Examinations';
+  const activeTuitionTest = tuitionTests[0]?.name || 'All Tuition Tests';
 
   // 1. Student Report Data
   const filteredStudents = students.filter(s => selectedClass === 'All Classes' || s.class === selectedClass);
 
   // 2. Attendance Report Data
-  const attendanceRows = MOCK_STUDENTS.filter(s => selectedClass === 'All Classes' || s.class === selectedClass).map((st, i) => ({
-    rollNo: st.rollNo,
-    name: st.name,
-    class: st.class,
-    batch: st.batch,
-    presentDays: 26 - i,
-    absentDays: 2 + i,
-    lateDays: i % 2,
-    rate: `${st.attendanceRate}%`,
-    status: st.attendanceRate >= 85 ? 'Regular' : 'Needs Attention'
-  }));
+  const attendanceRows = students
+    .filter(s => selectedClass === 'All Classes' || s.class === selectedClass)
+    .map(st => ({
+      rollNo: st.rollNo,
+      name: st.name,
+      class: st.class,
+      batch: st.batch,
+      presentDays: st.attendanceRate ? Math.round((st.attendanceRate / 100) * 30) : 0,
+      absentDays: st.attendanceRate ? 30 - Math.round((st.attendanceRate / 100) * 30) : 0,
+      lateDays: 0,
+      rate: `${st.attendanceRate || 0}%`,
+      status: (st.attendanceRate || 0) >= 85 ? 'Regular' : 'Needs Attention'
+    }));
 
   // 3. School Exam Report Data
-  const activeSchoolExam = schoolExams[0]?.name || 'Half Yearly Examination';
-  const schoolExamRows = [
-    { rollNo: '001', name: 'Aditya Sharma', exam: activeSchoolExam, class: 'Class 10', subject: 'Mathematics', marks: 96, max: 100, pct: '96%', grade: 'A+' },
-    { rollNo: '003', name: 'Bhavana Reddy', exam: activeSchoolExam, class: 'Class 10', subject: 'Mathematics', marks: 88, max: 100, pct: '88%', grade: 'A' },
-    { rollNo: '004', name: 'Charan Kumar', exam: activeSchoolExam, class: 'Class 8', subject: 'Mathematics', marks: 72, max: 100, pct: '72%', grade: 'B+' },
-    { rollNo: '005', name: 'Divya Nair', exam: activeSchoolExam, class: 'Class 10', subject: 'Mathematics', marks: 85, max: 100, pct: '85%', grade: 'A' },
-    { rollNo: '006', name: 'Harshith Reddy', exam: activeSchoolExam, class: 'Class 9', subject: 'Mathematics', marks: 67, max: 100, pct: '67%', grade: 'B' },
-    { rollNo: '002', name: 'Kavya Sri', exam: activeSchoolExam, class: 'Class 9', subject: 'Mathematics', marks: 91, max: 100, pct: '91%', grade: 'A+' },
-    { rollNo: '007', name: 'Manish Verma', exam: activeSchoolExam, class: 'Class 9', subject: 'Mathematics', marks: 45, max: 100, pct: '45%', grade: 'C' },
-    { rollNo: '008', name: 'Nithya Sree', exam: activeSchoolExam, class: 'Class 8', subject: 'Mathematics', marks: 78, max: 100, pct: '78%', grade: 'B+' }
-  ].filter(r => selectedClass === 'All Classes' || r.class === selectedClass);
+  const schoolExamRows = Object.entries(schoolExamMarks).flatMap(([key, markList]) => {
+    const [examId, className, subject] = key.split('_');
+    const ex = schoolExams.find(e => e.id === examId);
+    return markList
+      .filter(() => selectedClass === 'All Classes' || className === selectedClass)
+      .map(m => {
+        const max = m.maxMarks || 100;
+        const pct = `${Math.round((m.marks / max) * 100)}%`;
+        const pctNum = (m.marks / max) * 100;
+        const grade = pctNum >= 90 ? 'A+' : pctNum >= 80 ? 'A' : pctNum >= 70 ? 'B+' : pctNum >= 60 ? 'B' : pctNum >= 50 ? 'C' : 'D';
+        return {
+          rollNo: m.rollNo || '—',
+          name: m.studentName || 'Student',
+          exam: ex?.name || 'Examination',
+          class: className || 'Class 10',
+          subject: subject || 'General',
+          marks: m.marks,
+          max,
+          pct,
+          grade
+        };
+      });
+  });
 
   // 4. Tuition Test Report Data
-  const activeTuitionTest = tuitionTests[0]?.name || 'Physics Unit Test 1';
-  const tuitionTestRows = [
-    { rollNo: '001', name: 'Aditya Sharma', test: activeTuitionTest, batch: 'Batch A', subject: 'Physics', marks: 48, max: 50, pct: '96%', grade: 'A+' },
-    { rollNo: '002', name: 'Kavya Sri', test: activeTuitionTest, batch: 'Batch A', subject: 'Physics', marks: 45, max: 50, pct: '90%', grade: 'A+' },
-    { rollNo: '003', name: 'Bhavana Reddy', test: activeTuitionTest, batch: 'Batch A', subject: 'Physics', marks: 44, max: 50, pct: '88%', grade: 'A' },
-    { rollNo: '004', name: 'Charan Kumar', test: activeTuitionTest, batch: 'Batch B', subject: 'Physics', marks: 36, max: 50, pct: '72%', grade: 'B+' },
-    { rollNo: '005', name: 'Divya Nair', test: activeTuitionTest, batch: 'Batch A', subject: 'Physics', marks: 42, max: 50, pct: '84%', grade: 'A' },
-    { rollNo: '006', name: 'Harshith Reddy', test: activeTuitionTest, batch: 'Batch A', subject: 'Physics', marks: 33, max: 50, pct: '66%', grade: 'B' },
-    { rollNo: '007', name: 'Manish Verma', test: activeTuitionTest, batch: 'Batch B', subject: 'Physics', marks: 21, max: 50, pct: '42%', grade: 'C' },
-    { rollNo: '008', name: 'Nithya Sree', test: activeTuitionTest, batch: 'Batch B', subject: 'Physics', marks: 39, max: 50, pct: '78%', grade: 'B+' }
-  ];
+  const tuitionTestRows = Object.entries(tuitionTestMarks).flatMap(([key, markList]) => {
+    const [testId, batchName, subject] = key.split('_');
+    const t = tuitionTests.find(x => x.id === testId);
+    return markList.map(m => {
+      const max = m.maxMarks || 50;
+      const pct = `${Math.round((m.marks / max) * 100)}%`;
+      const pctNum = (m.marks / max) * 100;
+      const grade = pctNum >= 90 ? 'A+' : pctNum >= 80 ? 'A' : pctNum >= 70 ? 'B+' : pctNum >= 60 ? 'B' : pctNum >= 50 ? 'C' : 'D';
+      return {
+        rollNo: m.rollNo || '—',
+        name: m.studentName || 'Student',
+        test: t?.name || 'Tuition Test',
+        batch: batchName || 'General',
+        subject: subject || 'General',
+        marks: m.marks,
+        max,
+        pct,
+        grade
+      };
+    });
+  });
 
   // 5. Fee Status Report Data
   const filteredFees = studentFees.filter(f => selectedClass === 'All Classes' || f.class.includes(selectedClass));
@@ -421,29 +446,37 @@ export const ReportsCenterPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredStudents.map((st, idx) => (
-                  <tr key={st.id}>
-                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                    <td>
-                      <div className="user-table-cell">
-                        <img src={st.avatar} alt={st.name} className="user-table-avatar" />
-                        <span className="user-table-name">{st.name}</span>
-                      </div>
-                    </td>
-                    <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
-                    <td style={{ fontWeight: 600, color: '#334155' }}>{st.class} ({st.batch})</td>
-                    <td style={{ color: '#475569' }}>{st.parent?.fatherName || 'Ramesh Reddy'}</td>
-                    <td style={{ color: '#64748B', fontSize: '13px' }}>{st.parent?.phone || '98765 00000'}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className={`badge ${st.attendanceRate >= 85 ? 'badge-success' : 'badge-warning'}`}>
-                        {st.attendanceRate}%
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className="badge badge-neutral">{st.status}</span>
+                {filteredStudents.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No students found for this class.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredStudents.map((st, idx) => (
+                    <tr key={st.id}>
+                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                      <td>
+                        <div className="user-table-cell">
+                          <img src={st.avatar} alt={st.name} className="user-table-avatar" />
+                          <span className="user-table-name">{st.name}</span>
+                        </div>
+                      </td>
+                      <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
+                      <td style={{ fontWeight: 600, color: '#334155' }}>{st.class} ({st.batch})</td>
+                      <td style={{ color: '#475569' }}>{st.parent?.fatherName || '—'}</td>
+                      <td style={{ color: '#64748B', fontSize: '13px' }}>{st.parent?.phone || '—'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className={`badge ${st.attendanceRate >= 85 ? 'badge-success' : 'badge-warning'}`}>
+                          {st.attendanceRate}%
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className="badge badge-neutral">{st.status}</span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -466,22 +499,30 @@ export const ReportsCenterPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {attendanceRows.map((att, idx) => (
-                  <tr key={att.rollNo}>
-                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                    <td style={{ fontWeight: 700, color: '#0F172A' }}>{att.name}</td>
-                    <td style={{ color: '#64748B' }}>{att.rollNo}</td>
-                    <td>{att.class} • {att.batch}</td>
-                    <td style={{ textAlign: 'center', color: '#10B981', fontWeight: 700 }}>{att.presentDays}</td>
-                    <td style={{ textAlign: 'center', color: '#EF4444', fontWeight: 700 }}>{att.absentDays}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 800 }}>{att.rate}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className={`badge ${att.status === 'Regular' ? 'badge-success' : 'badge-danger'}`}>
-                        {att.status}
-                      </span>
+                {attendanceRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No attendance records found for this class.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  attendanceRows.map((att, idx) => (
+                    <tr key={att.rollNo}>
+                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{att.name}</td>
+                      <td style={{ color: '#64748B' }}>{att.rollNo}</td>
+                      <td>{att.class} • {att.batch}</td>
+                      <td style={{ textAlign: 'center', color: '#10B981', fontWeight: 700 }}>{att.presentDays}</td>
+                      <td style={{ textAlign: 'center', color: '#EF4444', fontWeight: 700 }}>{att.absentDays}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 800 }}>{att.rate}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className={`badge ${att.status === 'Regular' ? 'badge-success' : 'badge-danger'}`}>
+                          {att.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -505,23 +546,31 @@ export const ReportsCenterPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {schoolExamRows.map((ex, idx) => (
-                  <tr key={idx}>
-                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                    <td style={{ fontWeight: 700, color: '#0F172A' }}>{ex.name}</td>
-                    <td style={{ color: '#64748B' }}>{ex.rollNo}</td>
-                    <td>{ex.exam}</td>
-                    <td>{ex.class}</td>
-                    <td style={{ fontWeight: 600 }}>{ex.subject}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{ex.marks} / {ex.max}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{ex.pct}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className={`badge ${ex.grade === 'A+' || ex.grade === 'A' ? 'badge-success' : 'badge-info'}`}>
-                        {ex.grade}
-                      </span>
+                {schoolExamRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No school examination results recorded for this class.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  schoolExamRows.map((ex, idx) => (
+                    <tr key={idx}>
+                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{ex.name}</td>
+                      <td style={{ color: '#64748B' }}>{ex.rollNo}</td>
+                      <td>{ex.exam}</td>
+                      <td>{ex.class}</td>
+                      <td style={{ fontWeight: 600 }}>{ex.subject}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 700 }}>{ex.marks} / {ex.max}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 700 }}>{ex.pct}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className={`badge ${ex.grade === 'A+' || ex.grade === 'A' ? 'badge-success' : 'badge-info'}`}>
+                          {ex.grade}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -545,23 +594,31 @@ export const ReportsCenterPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {tuitionTestRows.map((t, idx) => (
-                  <tr key={idx}>
-                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                    <td style={{ fontWeight: 700, color: '#0F172A' }}>{t.name}</td>
-                    <td style={{ color: '#64748B' }}>{t.rollNo}</td>
-                    <td>{t.test}</td>
-                    <td>{t.batch}</td>
-                    <td style={{ fontWeight: 600 }}>{t.subject}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{t.marks} / {t.max}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{t.pct}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className={`badge ${t.grade === 'A+' || t.grade === 'A' ? 'badge-success' : 'badge-info'}`}>
-                        {t.grade}
-                      </span>
+                {tuitionTestRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No tuition test results recorded.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  tuitionTestRows.map((t, idx) => (
+                    <tr key={idx}>
+                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{t.name}</td>
+                      <td style={{ color: '#64748B' }}>{t.rollNo}</td>
+                      <td>{t.test}</td>
+                      <td>{t.batch}</td>
+                      <td style={{ fontWeight: 600 }}>{t.subject}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 700 }}>{t.marks} / {t.max}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 700 }}>{t.pct}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className={`badge ${t.grade === 'A+' || t.grade === 'A' ? 'badge-success' : 'badge-info'}`}>
+                          {t.grade}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -584,29 +641,37 @@ export const ReportsCenterPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredFees.map((f, idx) => {
-                  const remaining = f.totalFees - f.paidAmount;
-                  const isPaid = remaining === 0;
-                  const isPartial = f.paidAmount > 0 && remaining > 0;
-                  return (
-                    <tr key={f.id}>
-                      <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
-                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{f.studentName}</td>
-                      <td style={{ color: '#64748B' }}>{f.class}</td>
-                      <td>{f.feePlan || 'Monthly Tuition'}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{f.totalFees.toLocaleString('en-IN')}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600, color: '#10B981' }}>₹{f.paidAmount.toLocaleString('en-IN')}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: remaining > 0 ? '#EF4444' : '#10B981' }}>
-                        ₹{remaining.toLocaleString('en-IN')}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        {isPaid && <span className="badge badge-success">Paid</span>}
-                        {isPartial && <span className="badge badge-warning">Partial</span>}
-                        {!isPaid && !isPartial && <span className="badge badge-danger">Unpaid</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {filteredFees.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: '#64748B' }}>
+                      No fee records found for this class.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredFees.map((f, idx) => {
+                    const remaining = f.totalFees - f.paidAmount;
+                    const isPaid = remaining === 0;
+                    const isPartial = f.paidAmount > 0 && remaining > 0;
+                    return (
+                      <tr key={f.id}>
+                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 700, color: '#0F172A' }}>{f.studentName}</td>
+                        <td style={{ color: '#64748B' }}>{f.class}</td>
+                        <td>{f.feePlan || 'Monthly Tuition'}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{f.totalFees.toLocaleString('en-IN')}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: '#10B981' }}>₹{f.paidAmount.toLocaleString('en-IN')}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: remaining > 0 ? '#EF4444' : '#10B981' }}>
+                          ₹{remaining.toLocaleString('en-IN')}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          {isPaid && <span className="badge badge-success">Paid</span>}
+                          {isPartial && <span className="badge badge-warning">Partial</span>}
+                          {!isPaid && !isPartial && <span className="badge badge-danger">Unpaid</span>}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
