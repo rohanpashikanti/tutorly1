@@ -41,7 +41,7 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
      FROM teachers t
      JOIN memberships m ON m.id = t.membership_id
      JOIN user_refs ur ON ur.id = m.user_ref_id
-     WHERE t.institution_id = ?
+     WHERE t.institution_id = ? AND t.status != 'terminated'
      ORDER BY t.created_at DESC`
   )
     .bind(instId)
@@ -458,19 +458,49 @@ teachersRouter.put('/:institutionId/teachers/:teacherId', async (c) => {
 
         if (year) {
           for (const cName of classList) {
-            const cls = await DB.prepare(
+            let cls = await DB.prepare(
               `SELECT id FROM classes WHERE institution_id = ? AND LOWER(name) = LOWER(?) AND deleted_at IS NULL`
             )
               .bind(instId, cName)
               .first<{ id: string }>();
 
+            if (!cls) {
+              const newClassId = `cls-${crypto.randomUUID().slice(0, 8)}`;
+              await DB.prepare(
+                `INSERT OR IGNORE INTO classes (id, institution_id, name, code, status)
+                 VALUES (?, ?, ?, ?, 'active')`
+              )
+                .bind(newClassId, instId, cName, cName.replace(/\D/g, '') || 'C')
+                .run();
+              cls = await DB.prepare(
+                `SELECT id FROM classes WHERE institution_id = ? AND LOWER(name) = LOWER(?) AND deleted_at IS NULL`
+              )
+                .bind(instId, cName)
+                .first<{ id: string }>();
+            }
+
             if (cls) {
               for (const sName of subjectList) {
-                const sub = await DB.prepare(
+                let sub = await DB.prepare(
                   `SELECT id FROM subjects WHERE institution_id = ? AND LOWER(name) = LOWER(?)`
                 )
                   .bind(instId, sName)
                   .first<{ id: string }>();
+
+                if (!sub) {
+                  const newSubId = `sub-${crypto.randomUUID().slice(0, 8)}`;
+                  await DB.prepare(
+                    `INSERT OR IGNORE INTO subjects (id, institution_id, name, code, status)
+                     VALUES (?, ?, ?, ?, 'active')`
+                  )
+                    .bind(newSubId, instId, sName, sName.slice(0, 4).toUpperCase())
+                    .run();
+                  sub = await DB.prepare(
+                    `SELECT id FROM subjects WHERE institution_id = ? AND LOWER(name) = LOWER(?)`
+                  )
+                    .bind(instId, sName)
+                    .first<{ id: string }>();
+                }
 
                 if (sub) {
                   const assignId = `ta-${crypto.randomUUID().slice(0, 8)}`;
@@ -496,3 +526,71 @@ teachersRouter.put('/:institutionId/teachers/:teacherId', async (c) => {
 
   return c.json({ success: true });
 });
+
+teachersRouter.delete('/:institutionId/teachers/:teacherId', async (c) => {
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const teacherId = c.req.param('teacherId');
+  const { DB } = c.env;
+  const instId = auth.institutionId;
+
+  try {
+    const teacher = await DB.prepare(
+      `SELECT t.id, t.membership_id, m.user_ref_id
+       FROM teachers t
+       JOIN memberships m ON m.id = t.membership_id
+       WHERE t.id = ? AND t.institution_id = ?`
+    )
+      .bind(teacherId, instId)
+      .first<{ id: string; membership_id: string; user_ref_id: string }>();
+
+    if (!teacher) {
+      return c.json({ error: 'Teacher not found' }, 404);
+    }
+
+    // Check if membership is referenced in attendance or assessments
+    const refCount = await DB.prepare(
+      `SELECT (
+        (SELECT COUNT(*) FROM attendance_sessions WHERE created_by_membership_id = ?) +
+        (SELECT COUNT(*) FROM assessments WHERE created_by_membership_id = ?)
+      ) as total_refs`
+    )
+      .bind(teacher.membership_id, teacher.membership_id)
+      .first<{ total_refs: number }>();
+
+    const hasRefs = (refCount?.total_refs || 0) > 0;
+
+    if (!hasRefs) {
+      // Clean hard delete if no historical records exist
+      await DB.batch([
+        DB.prepare(`DELETE FROM teacher_assignments WHERE institution_id = ? AND teacher_id = ?`).bind(instId, teacherId),
+        DB.prepare(`DELETE FROM teachers WHERE institution_id = ? AND id = ?`).bind(instId, teacherId),
+        DB.prepare(`DELETE FROM memberships WHERE institution_id = ? AND id = ?`).bind(instId, teacher.membership_id),
+        DB.prepare(`DELETE FROM user_refs WHERE id = ?`).bind(teacher.user_ref_id),
+      ]);
+    } else {
+      // Soft delete if historical records reference this teacher
+      await DB.batch([
+        DB.prepare(`UPDATE teacher_assignments SET status = 'ended' WHERE institution_id = ? AND teacher_id = ?`).bind(instId, teacherId),
+        DB.prepare(
+          `UPDATE teachers
+           SET status = 'terminated',
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE institution_id = ? AND id = ?`
+        ).bind(instId, teacherId),
+        DB.prepare(
+          `UPDATE memberships
+           SET status = 'inactive'
+           WHERE institution_id = ? AND id = ?`
+        ).bind(instId, teacher.membership_id),
+      ]);
+    }
+
+    return c.json({ success: true, teacherId });
+  } catch (err) {
+    console.error('Delete teacher error:', err);
+    return c.json({ error: 'Failed to delete teacher' }, 500);
+  }
+});
+

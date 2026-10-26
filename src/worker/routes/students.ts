@@ -508,6 +508,9 @@ studentsRouter.put('/:institutionId/students/:studentId', async (c) => {
   const name = typeof body.name === 'string' ? body.name.trim() : null;
   const phone = typeof body.phone === 'string' ? body.phone.trim() : null;
   const email = typeof body.email === 'string' ? body.email.trim() : null;
+  const fatherName = typeof body.fatherName === 'string' ? body.fatherName.trim() : null;
+  const className = typeof body.class === 'string' ? body.class.trim() : null;
+  const batchName = typeof body.batch === 'string' ? body.batch.trim() : null;
   const status =
     body.status === 'Inactive'
       ? 'inactive'
@@ -520,18 +523,57 @@ studentsRouter.put('/:institutionId/students/:studentId', async (c) => {
   const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
 
   try {
-    await c.env.DB.prepare(
-      `UPDATE students
-       SET first_name = COALESCE(?, first_name),
-           last_name = COALESCE(?, last_name),
-           phone = COALESCE(?, phone),
-           email = COALESCE(?, email),
-           status = ?,
-           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND institution_id = ?`
-    )
-      .bind(firstName, lastName, phone, email, status, studentId, auth.institutionId)
-      .run();
+    const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(
+        `UPDATE students
+         SET first_name = COALESCE(?, first_name),
+             last_name = COALESCE(?, last_name),
+             phone = COALESCE(?, phone),
+             email = COALESCE(?, email),
+             status = ?,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND institution_id = ?`
+      ).bind(firstName, lastName, phone, email, status, studentId, auth.institutionId),
+    ];
+
+    if (fatherName || phone || email) {
+      statements.push(
+        c.env.DB.prepare(
+          `UPDATE guardians
+           SET name = COALESCE(?, name),
+               phone = COALESCE(?, phone),
+               email = COALESCE(?, email),
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE institution_id = ? AND id IN (
+             SELECT guardian_id FROM student_guardians WHERE student_id = ? AND institution_id = ?
+           )`
+        ).bind(fatherName, phone, email, auth.institutionId, studentId, auth.institutionId)
+      );
+    }
+
+    if (className) {
+      statements.push(
+        c.env.DB.prepare(
+          `UPDATE enrollments
+           SET class_id = COALESCE((SELECT id FROM classes WHERE institution_id = ? AND name = ? AND deleted_at IS NULL LIMIT 1), class_id),
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE student_id = ? AND institution_id = ? AND status = 'active'`
+        ).bind(auth.institutionId, className, studentId, auth.institutionId)
+      );
+    }
+
+    if (batchName) {
+      statements.push(
+        c.env.DB.prepare(
+          `UPDATE enrollments
+           SET batch_id = (SELECT id FROM batches WHERE institution_id = ? AND name = ? AND status != 'archived' LIMIT 1),
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE student_id = ? AND institution_id = ? AND status = 'active'`
+        ).bind(auth.institutionId, batchName, studentId, auth.institutionId)
+      );
+    }
+
+    await c.env.DB.batch(statements);
   } catch (err) {
     console.error('Update student error:', err);
     return c.json({ error: 'Failed to update student' }, 500);
@@ -545,19 +587,48 @@ studentsRouter.delete('/:institutionId/students/:studentId', async (c) => {
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const studentId = c.req.param('studentId');
+  const { DB } = c.env;
+  const instId = auth.institutionId;
+
   try {
-    await c.env.DB.prepare(
-      `UPDATE students
-       SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-           status = 'withdrawn'
-       WHERE id = ? AND institution_id = ?`
+    const hasFinancialRecords = await DB.prepare(
+      `SELECT (
+        (SELECT COUNT(*) FROM payments WHERE student_id = ? AND institution_id = ?) +
+        (SELECT COUNT(*) FROM assessment_marks WHERE student_id = ? AND institution_id = ?)
+      ) as total_records`
     )
-      .bind(studentId, auth.institutionId)
-      .run();
+      .bind(studentId, instId, studentId, instId)
+      .first<{ total_records: number }>();
+
+    if ((hasFinancialRecords?.total_records || 0) === 0) {
+      await DB.batch([
+        DB.prepare(`DELETE FROM fee_charges WHERE student_id = ? AND institution_id = ?`).bind(studentId, instId),
+        DB.prepare(`DELETE FROM student_fee_assignments WHERE student_id = ? AND institution_id = ?`).bind(studentId, instId),
+        DB.prepare(`DELETE FROM attendance_records WHERE student_id = ? AND institution_id = ?`).bind(studentId, instId),
+        DB.prepare(`DELETE FROM enrollments WHERE student_id = ? AND institution_id = ?`).bind(studentId, instId),
+        DB.prepare(`DELETE FROM student_guardians WHERE student_id = ? AND institution_id = ?`).bind(studentId, instId),
+        DB.prepare(`DELETE FROM students WHERE id = ? AND institution_id = ?`).bind(studentId, instId),
+      ]);
+    } else {
+      await DB.batch([
+        DB.prepare(
+          `UPDATE students
+           SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+               status = 'withdrawn'
+           WHERE id = ? AND institution_id = ?`
+        ).bind(studentId, instId),
+        DB.prepare(
+          `UPDATE enrollments
+           SET status = 'withdrawn',
+               ended_on = strftime('%Y-%m-%d', 'now')
+           WHERE student_id = ? AND institution_id = ? AND status = 'active'`
+        ).bind(studentId, instId),
+      ]);
+    }
   } catch (err) {
     console.error('Delete student error:', err);
-    return c.json({ error: 'Failed to archive student' }, 500);
+    return c.json({ error: 'Failed to delete student' }, 500);
   }
 
-  return c.json({ success: true });
+  return c.json({ success: true, studentId });
 });

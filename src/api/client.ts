@@ -182,6 +182,13 @@ export const api = {
       });
       return handleResponse<{ success: boolean }>(res);
     },
+    async delete(institutionId: string, teacherId: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      return handleResponse<{ success: boolean; teacherId: string }>(res);
+    },
   },
 
   // Students
@@ -215,7 +222,7 @@ export const api = {
       });
       return handleResponse<{ success: boolean; studentId: string; admissionNo: string }>(res);
     },
-    async update(institutionId: string, studentId: string, data: Partial<Student>) {
+    async update(institutionId: string, studentId: string, data: Partial<Student> & { fatherName?: string }) {
       const res = await fetch(`/api/institutions/${institutionId}/students/${studentId}`, {
         method: 'PUT',
         credentials: 'same-origin',

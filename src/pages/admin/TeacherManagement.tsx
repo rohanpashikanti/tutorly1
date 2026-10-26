@@ -10,6 +10,7 @@ import {
   Phone,
   Mail,
   Edit2,
+  Trash2,
   Send,
   Calendar,
   MapPin,
@@ -149,6 +150,26 @@ export const TeacherManagement: React.FC = () => {
       await loadTeachers();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to update teacher', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const [deleteConfirmTeacher, setDeleteConfirmTeacher] = useState<Teacher | null>(null);
+
+  const handleDeleteTeacher = async (teacher: Teacher) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await api.teachers.delete(activeInstitutionId, teacher.id);
+      showToast(`Teacher ${teacher.name} has been removed.`, 'success');
+      setDeleteConfirmTeacher(null);
+      if (activeDrawerTeacher?.id === teacher.id) {
+        setActiveDrawerTeacher(null);
+      }
+      await loadTeachers();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete teacher', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -333,7 +354,7 @@ export const TeacherManagement: React.FC = () => {
                   <th>Classes & Batches</th>
                   <th>Contact</th>
                   <th>Status</th>
-                  <th style={{ width: '40px' }}></th>
+                  <th style={{ width: '90px', textAlign: 'center' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -400,7 +421,29 @@ export const TeacherManagement: React.FC = () => {
                           </span>
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
-                          <ChevronRight size={16} color="#94A3B8" />
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                            <button
+                              onClick={() => handleOpenEdit(teacher)}
+                              style={{ padding: '5px', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#6366F1', cursor: 'pointer' }}
+                              title="Edit Teacher"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmTeacher(teacher)}
+                              style={{ padding: '5px', borderRadius: '6px', border: '1px solid #FEE2E2', background: '#FEF2F2', color: '#EF4444', cursor: 'pointer' }}
+                              title="Delete Teacher"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                            <button
+                              onClick={() => setActiveDrawerTeacher(teacher)}
+                              style={{ padding: '5px', borderRadius: '6px', border: 'none', background: 'transparent', color: '#94A3B8', cursor: 'pointer' }}
+                              title="View Details"
+                            >
+                              <ChevronRight size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -495,10 +538,10 @@ export const TeacherManagement: React.FC = () => {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
                 <button
                   className="btn btn-primary"
-                  style={{ flex: 1, padding: '8px' }}
+                  style={{ flex: 1, padding: '8px', fontSize: '13px' }}
                   onClick={() => handleOpenEdit(activeDrawerTeacher)}
                 >
                   <Edit2 size={14} />
@@ -506,11 +549,11 @@ export const TeacherManagement: React.FC = () => {
                 </button>
                 <button
                   className="btn btn-secondary"
-                  style={{ flex: 1, padding: '8px' }}
-                  onClick={() => showToast(`[Demo Mode] Simulated message queued for ${activeDrawerTeacher.name}. Live SMS/WhatsApp integration required.`, 'info')}
+                  style={{ flex: 1, padding: '8px', fontSize: '13px', color: '#DC2626', borderColor: '#FCA5A5', background: '#FEF2F2' }}
+                  onClick={() => setDeleteConfirmTeacher(activeDrawerTeacher)}
                 >
-                  <Send size={14} />
-                  <span>Message</span>
+                  <Trash2 size={14} />
+                  <span>Delete</span>
                 </button>
               </div>
             </div>
@@ -730,6 +773,45 @@ export const TeacherManagement: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmTeacher && (
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setDeleteConfirmTeacher(null)}>
+          <div className="modal-card" style={{ maxWidth: '440px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title" style={{ color: '#DC2626' }}>Remove Teacher</h2>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setDeleteConfirmTeacher(null)}>
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '20px 24px' }}>
+              <p style={{ fontSize: '13.5px', color: '#334155', lineHeight: 1.6, margin: 0 }}>
+                Are you sure you want to remove <strong>{deleteConfirmTeacher.name}</strong> ({deleteConfirmTeacher.code})?
+                This faculty member will be removed from all assigned classes and subjects.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={isSubmitting}
+                onClick={() => !isSubmitting && setDeleteConfirmTeacher(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ background: '#DC2626', borderColor: '#DC2626', color: '#fff' }}
+                disabled={isSubmitting}
+                onClick={() => handleDeleteTeacher(deleteConfirmTeacher)}
+              >
+                {isSubmitting ? 'Removing...' : 'Confirm Remove'}
+              </button>
+            </div>
           </div>
         </div>
       )}

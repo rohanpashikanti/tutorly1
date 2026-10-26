@@ -19,6 +19,7 @@ import {
   BookOpen,
   ClipboardCheck,
   Edit2,
+  Trash2,
   FileText
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -151,12 +152,35 @@ export const StudentDirectory: React.FC = () => {
         name: editFormData.name,
         phone: editFormData.phone,
         email: editFormData.email,
+        fatherName: editFormData.fatherName,
+        class: editFormData.class,
+        batch: editFormData.batch,
       });
       setShowEditModal(false);
       showToast(`Updated profile for ${editFormData.name}`, 'success');
       await loadStudents();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to update student profile', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const [deleteConfirmStudent, setDeleteConfirmStudent] = useState<Student | null>(null);
+
+  const handleDeleteStudent = async (student: Student) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await api.students.delete(activeInstitutionId, student.id);
+      showToast(`Student ${student.name} (${student.admissionNo}) has been removed.`, 'success');
+      setDeleteConfirmStudent(null);
+      if (activeDrawerStudent?.id === student.id) {
+        setActiveDrawerStudent(null);
+      }
+      await loadStudents();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete student', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -375,7 +399,7 @@ export const StudentDirectory: React.FC = () => {
                   <th>Parent / Guardian</th>
                   <th>Status</th>
                   <th>Attendance</th>
-                  <th style={{ width: '40px' }}></th>
+                  <th style={{ width: '90px', textAlign: 'center' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -463,13 +487,29 @@ export const StudentDirectory: React.FC = () => {
                           </div>
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => navigateTo('student-profile', { studentId: student.id })}
-                            style={{ padding: '6px', borderRadius: '6px', color: '#64748B' }}
-                            title="View Profile"
-                          >
-                            <ChevronRight size={16} />
-                          </button>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                            <button
+                              onClick={() => handleOpenEdit(student)}
+                              style={{ padding: '5px', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#6366F1', cursor: 'pointer' }}
+                              title="Edit Student"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmStudent(student)}
+                              style={{ padding: '5px', borderRadius: '6px', border: '1px solid #FEE2E2', background: '#FEF2F2', color: '#EF4444', cursor: 'pointer' }}
+                              title="Delete Student"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                            <button
+                              onClick={() => navigateTo('student-profile', { studentId: student.id })}
+                              style={{ padding: '5px', borderRadius: '6px', border: 'none', background: 'transparent', color: '#94A3B8', cursor: 'pointer' }}
+                              title="View Profile"
+                            >
+                              <ChevronRight size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -510,15 +550,35 @@ export const StudentDirectory: React.FC = () => {
                 </div>
               </div>
 
-              {/* View Full Profile CTA */}
-              <button
-                className="btn btn-primary"
-                style={{ width: '100%', padding: '8px', fontSize: '13px' }}
-                onClick={() => navigateTo('student-profile', { studentId: activeDrawerStudent.id })}
-              >
-                <span>View Full Profile</span>
-                <ChevronRight size={14} />
-              </button>
+              {/* Action Buttons in Drawer */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%', padding: '8px', fontSize: '13px' }}
+                  onClick={() => navigateTo('student-profile', { studentId: activeDrawerStudent.id })}
+                >
+                  <span>View Full Profile</span>
+                  <ChevronRight size={14} />
+                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ flex: 1, padding: '7px', fontSize: '12.5px' }}
+                    onClick={() => handleOpenEdit(activeDrawerStudent)}
+                  >
+                    <Edit2 size={13} />
+                    <span>Edit Profile</span>
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ flex: 1, padding: '7px', fontSize: '12.5px', color: '#DC2626', borderColor: '#FCA5A5', background: '#FEF2F2' }}
+                    onClick={() => setDeleteConfirmStudent(activeDrawerStudent)}
+                  >
+                    <Trash2 size={13} />
+                    <span>Delete</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Quick Details Body */}
@@ -929,6 +989,44 @@ export const StudentDirectory: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmStudent && (
+        <div className="modal-backdrop" onClick={() => !isSubmitting && setDeleteConfirmStudent(null)}>
+          <div className="modal-card" style={{ maxWidth: '440px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title" style={{ color: '#DC2626' }}>Remove Student</h2>
+              <button disabled={isSubmitting} onClick={() => !isSubmitting && setDeleteConfirmStudent(null)}>
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '20px 24px' }}>
+              <p style={{ fontSize: '13.5px', color: '#334155', lineHeight: 1.6, margin: 0 }}>
+                Are you sure you want to remove <strong>{deleteConfirmStudent.name}</strong> ({deleteConfirmStudent.admissionNo}) from the active student directory?
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={isSubmitting}
+                onClick={() => !isSubmitting && setDeleteConfirmStudent(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ background: '#DC2626', borderColor: '#DC2626', color: '#fff' }}
+                disabled={isSubmitting}
+                onClick={() => handleDeleteStudent(deleteConfirmStudent)}
+              >
+                {isSubmitting ? 'Removing...' : 'Confirm Remove'}
+              </button>
+            </div>
           </div>
         </div>
       )}

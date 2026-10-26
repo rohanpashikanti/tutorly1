@@ -483,4 +483,104 @@ describe('Tutorly Deduplication, Teacher Creation & Performance Audit Suite', ()
     // Performance response time is well under 100ms
     expect(duration).toBeLessThan(100);
   });
+
+  it('11. Full Edit and Delete lifecycle for teachers and students', async () => {
+    const { cookie } = await register();
+    const { institutionId } = await createInstitution(cookie);
+
+    // 1. Create Teacher
+    const tRes = await request(`/api/institutions/${institutionId}/teachers`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Arjun Das',
+        phone: '9888776655',
+        designation: 'Senior Lecturer',
+        subjects: 'Physics',
+        classes: 'Class 11',
+      }),
+    });
+    expect(tRes.status).toBe(201);
+    const { teacherId } = (await tRes.json()) as { teacherId: string };
+
+    // Edit Teacher
+    const editTRes = await request(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
+      method: 'PUT',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Arjun Das Senior',
+        designation: 'Head of Department',
+        phone: '9888776655',
+        subjects: 'Physics, Chemistry',
+        classes: 'Class 11, Class 12',
+      }),
+    });
+    expect(editTRes.status).toBe(200);
+
+    // Verify updated teacher list
+    const listRes1 = await request(`/api/institutions/${institutionId}/teachers`, {
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    const listBody1 = (await listRes1.json()) as { teachers: any[] };
+    const updatedTeacher = listBody1.teachers.find((t) => t.id === teacherId);
+    expect(updatedTeacher.name).toBe('Arjun Das Senior');
+    expect(updatedTeacher.designation).toBe('Head of Department');
+    expect(updatedTeacher.subjects).toContain('Chemistry');
+
+    // Delete Teacher
+    const delTRes = await request(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
+      method: 'DELETE',
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    expect(delTRes.status).toBe(200);
+
+    // Verify teacher is removed from list
+    const listRes2 = await request(`/api/institutions/${institutionId}/teachers`, {
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    const listBody2 = (await listRes2.json()) as { teachers: any[] };
+    expect(listBody2.teachers.some((t) => t.id === teacherId)).toBe(false);
+
+    // 2. Create Student
+    const sRes = await request(`/api/institutions/${institutionId}/students`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Rohan Sharma',
+        class: 'Class 9',
+        batch: 'Batch A',
+        phone: '9123456789',
+        fatherName: 'Deepak Sharma',
+      }),
+    });
+    expect(sRes.status).toBe(201);
+    const sBody = (await sRes.json()) as any;
+    const studentId = sBody.studentId || sBody.id;
+
+    // Edit Student
+    const editSRes = await request(`/api/institutions/${institutionId}/students/${studentId}`, {
+      method: 'PUT',
+      headers: { cookie, origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Rohan Sharma Jr',
+        phone: '9123456780',
+        fatherName: 'Deepak Sharma Sr',
+      }),
+    });
+    expect(editSRes.status).toBe(200);
+
+    // Delete Student
+    const delSRes = await request(`/api/institutions/${institutionId}/students/${studentId}`, {
+      method: 'DELETE',
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    expect(delSRes.status).toBe(200);
+
+    // Verify student is removed from active list
+    const listSRes = await request(`/api/institutions/${institutionId}/students`, {
+      headers: { cookie, origin: 'http://localhost:5173' },
+    });
+    const listSBody = (await listSRes.json()) as { students: any[] };
+    expect(listSBody.students.some((s) => s.id === studentId)).toBe(false);
+  });
 });
