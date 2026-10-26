@@ -1,3 +1,5 @@
+/// <reference path="../../worker-configuration.d.ts" />
+
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import worker from '../../src/worker/index';
@@ -52,9 +54,9 @@ describe('End-to-End Realistic Business Test & 3-Month Simulation', () => {
       headers: { cookie: owner.cookie, 'x-institution-id': institutionId },
     });
     expect(res.status).toBe(200);
-    const data = await res.json<{
+    const data = (await res.json()) as {
       stats: { totalStudents: number; totalTeachers: number; totalBatches: number };
-    }>();
+    };
 
     expect(data.stats.totalStudents).toBe(0);
     expect(data.stats.totalTeachers).toBe(0);
@@ -65,7 +67,7 @@ describe('End-to-End Realistic Business Test & 3-Month Simulation', () => {
       headers: { cookie: owner.cookie, 'x-institution-id': institutionId },
     });
     expect(studentsRes.status).toBe(200);
-    const studentsData = await studentsRes.json<{ students: unknown[] }>();
+    const studentsData = (await studentsRes.json()) as { students: unknown[] };
     expect(studentsData.students.length).toBe(0);
   });
 
@@ -359,12 +361,12 @@ describe('End-to-End Realistic Business Test & 3-Month Simulation', () => {
       headers: { cookie: owner.cookie, 'x-institution-id': instId },
     });
     expect(feesReportRes.status).toBe(200);
-    const feesReport = await feesReportRes.json<{
+    const feesReport = (await feesReportRes.json()) as {
       totalBilled: number;
       totalCollected: number;
       totalOutstanding: number;
       monthlyCollections: Array<{ month: string; amount: number }>;
-    }>();
+    };
 
     expect(feesReport.totalBilled).toBe(expectedBilledRupees);
     expect(feesReport.totalCollected).toBe(expectedCollectedRupees);
@@ -376,9 +378,9 @@ describe('End-to-End Realistic Business Test & 3-Month Simulation', () => {
       headers: { cookie: owner.cookie, 'x-institution-id': instId },
     });
     expect(dashRes.status).toBe(200);
-    const dashData = await dashRes.json<{
+    const dashData = (await dashRes.json()) as {
       stats: { totalStudents: number; totalTeachers: number; totalBatches: number };
-    }>();
+    };
 
     expect(dashData.stats.totalStudents).toBe(55);
     expect(dashData.stats.totalTeachers).toBe(5);
@@ -389,19 +391,19 @@ describe('End-to-End Realistic Business Test & 3-Month Simulation', () => {
       headers: { cookie: owner.cookie, 'x-institution-id': instId },
     });
     expect(teacherPortalRes.status).toBe(200);
-    const teacherPortalData = await teacherPortalRes.json<{
+    const teacherPortalData = (await teacherPortalRes.json()) as {
       totalAssignedStudents: number;
       assignedBatches: unknown[];
-    }>();
+    };
     expect(teacherPortalData.assignedBatches.length).toBeGreaterThanOrEqual(1);
 
     const parentPortalRes = await request(`/api/institutions/${instId}/parent/portal`, {
       headers: { cookie: owner.cookie, 'x-institution-id': instId },
     });
     expect(parentPortalRes.status).toBe(200);
-    const parentPortalData = await parentPortalRes.json<{
+    const parentPortalData = (await parentPortalRes.json()) as {
       children: Array<{ admissionNo: string; fees: { totalFee: number; paidAmount: number; pendingAmount: number } }>;
-    }>();
+    };
     expect(parentPortalData.children.length).toBeGreaterThanOrEqual(1);
 
     // 10. Security Constraint & Trigger Checks:

@@ -1,3 +1,5 @@
+/// <reference path="../../worker-configuration.d.ts" />
+
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import worker from '../../src/worker/index';
