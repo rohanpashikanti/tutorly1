@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_ENV": "production",
-    "APP_URL": "https://tutorly1-lyart.vercel.app"
+    "APP_URL": "https://tutorly1-cqsm.vercel.app"
   },
   "d1_databases": [
     {
@@ -31,7 +31,7 @@
     },
     "production": {
       "name": "tutorly-api",
-      "vars": { "APP_ENV": "production", "APP_URL": "https://tutorly1-lyart.vercel.app" },
+      "vars": { "APP_ENV": "production", "APP_URL": "https://tutorly1-cqsm.vercel.app" },
       "d1_databases": [
         {
           "binding": "DB",
