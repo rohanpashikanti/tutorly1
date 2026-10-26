@@ -239,22 +239,45 @@ export const AcademicCalendarPage: React.FC = () => {
   };
 
   const handleActivateYear = async (year: AcademicYear) => {
+    const previousYears = academicYears;
+    // Optimistic update immediately
+    setAcademicYears((prev) =>
+      prev.map((y) => ({
+        ...y,
+        status: y.id === year.id ? 'active' : y.status === 'active' ? 'completed' : y.status,
+      }))
+    );
+    showToast(`"${year.name}" is now the active academic year`, 'success');
+
     try {
       await api.academics.activateAcademicYear(activeInstitutionId, year.id);
-      showToast(`"${year.name}" is now the active academic year`, 'success');
-      await loadAcademicYears();
+      void loadAcademicYears();
     } catch (err: any) {
-      showToast(err?.message || 'Failed to activate academic year', 'error');
+      setAcademicYears(previousYears);
+      showToast(err?.message || 'Failed to activate academic year', 'error', {
+        label: 'Retry',
+        onClick: () => void handleActivateYear(year),
+      });
     }
   };
 
   const handleArchiveYear = async (year: AcademicYear) => {
+    const previousYears = academicYears;
+    // Optimistic update immediately
+    setAcademicYears((prev) =>
+      prev.map((y) => (y.id === year.id ? { ...y, status: 'archived' } : y))
+    );
+    showToast(`Archived "${year.name}"`, 'info');
+
     try {
       await api.academics.archiveAcademicYear(activeInstitutionId, year.id);
-      showToast(`Archived "${year.name}"`, 'info');
-      await loadAcademicYears();
+      void loadAcademicYears();
     } catch (err: any) {
-      showToast(err?.message || 'Failed to archive academic year', 'error');
+      setAcademicYears(previousYears);
+      showToast(err?.message || 'Failed to archive academic year', 'error', {
+        label: 'Retry',
+        onClick: () => void handleArchiveYear(year),
+      });
     }
   };
 
@@ -302,6 +325,22 @@ export const AcademicCalendarPage: React.FC = () => {
       return;
     }
 
+    const optimisticEvent: CalendarEvent = {
+      id: `temp-${Date.now()}`,
+      title: formState.title.trim(),
+      type: formState.type,
+      date: formState.date,
+      endDate: formState.endDate || undefined,
+      time: formState.time || undefined,
+      applicableClass: formState.applicableClass,
+      description: formState.description || undefined,
+    };
+
+    const previousEvents = events;
+    updateEventsAndPersist([optimisticEvent, ...events]);
+    setShowAddModal(false);
+    showToast(`Event "${formState.title}" scheduled!`, 'success');
+
     try {
       await api.calendar.create(activeInstitutionId, {
         title: formState.title.trim(),
@@ -312,13 +351,13 @@ export const AcademicCalendarPage: React.FC = () => {
         applicableClass: formState.applicableClass,
         description: formState.description || undefined,
       });
-      await refreshEvents();
-      setShowAddModal(false);
-      showToast(`Event "${formState.title}" scheduled and saved persistently!`, 'success');
-      return;
+      void refreshEvents();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to save event to database', 'error');
-      return;
+      updateEventsAndPersist(previousEvents);
+      showToast(err instanceof Error ? err.message : 'Failed to save event to database', 'error', {
+        label: 'Retry',
+        onClick: () => void handleSaveEvent(e),
+      });
     }
   };
 

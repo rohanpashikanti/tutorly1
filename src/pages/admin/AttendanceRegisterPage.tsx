@@ -176,7 +176,11 @@ export const AttendanceRegisterPage: React.FC = () => {
       'L': 'Late'
     };
 
-    setIsSaving(true);
+    const previousSavedState = isSaved;
+    setIsSaved(true);
+    setAttemptedSaveWithIncomplete(false);
+    showToast(`Attendance for ${selectedClass} - ${selectedBatch} saved!`, 'success');
+
     try {
       await api.attendance.submit(activeInstitutionId, {
         date: selectedDate,
@@ -188,13 +192,13 @@ export const AttendanceRegisterPage: React.FC = () => {
           remarks: s.remarks,
         })),
       });
-
-      setIsSaved(true);
-      setAttemptedSaveWithIncomplete(false);
-      showToast(`Attendance for ${selectedClass} - ${selectedBatch} successfully saved to database!`, 'success');
-      await loadAttendance();
+      void loadAttendance();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to save attendance', 'error');
+      setIsSaved(previousSavedState);
+      showToast(err instanceof Error ? err.message : 'Failed to save attendance', 'error', {
+        label: 'Retry',
+        onClick: () => void handleSaveAttendance(),
+      });
     } finally {
       setIsSaving(false);
     }

@@ -230,15 +230,34 @@ export const UserManagementPage: React.FC = () => {
     }
   };
 
-  // Status Toggle (Active <-> Suspended)
+  // Status Toggle (Active <-> Suspended) with Optimistic UI
   const toggleUserStatus = async (user: UserRecord) => {
-    const newStatus = user.status === 'Active' ? 'suspended' : 'active';
+    const previousStatus = user.status;
+    const newApiStatus = previousStatus === 'Active' ? 'suspended' : 'active';
+    const newUiStatus: 'Active' | 'Inactive' = newApiStatus === 'active' ? 'Active' : 'Inactive';
+
+    // Optimistically update local users state immediately
+    setUsers((prev) =>
+      prev.map((u) => (u.membershipId === user.membershipId ? { ...u, status: newUiStatus } : u))
+    );
+    showToast(`Account for ${user.name} marked as ${newUiStatus === 'Active' ? 'Active' : 'Suspended'}.`, 'info');
+
     try {
-      await api.users.updateStatus(activeInstitutionId, user.membershipId, newStatus);
-      await refreshUsers();
-      showToast(`Account for ${user.name} is now ${newStatus === 'active' ? 'Active' : 'Suspended'}.`, 'info');
+      await api.users.updateStatus(activeInstitutionId, user.membershipId, newApiStatus);
+      void refreshUsers();
     } catch (err: any) {
-      showToast(err.message || 'Failed to update user status', 'error');
+      // Rollback to previous status on error
+      setUsers((prev) =>
+        prev.map((u) => (u.membershipId === user.membershipId ? { ...u, status: previousStatus } : u))
+      );
+      showToast(
+        err.message || 'Failed to update user status.',
+        'error',
+        {
+          label: 'Retry',
+          onClick: () => void toggleUserStatus(user),
+        }
+      );
     }
   };
 

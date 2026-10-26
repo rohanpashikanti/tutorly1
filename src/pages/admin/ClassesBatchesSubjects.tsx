@@ -3,16 +3,11 @@ import {
   Layers,
   Users,
   BookOpen,
-  Calendar,
   Plus,
   Search,
-  MoreVertical,
   X,
   Edit2,
   Clock,
-  UserCheck,
-  CheckCircle2,
-  ChevronRight,
   Download
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -84,61 +79,115 @@ export const ClassesBatchesSubjects: React.FC = () => {
 
   const handleAddClass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+    if (!newClassName.trim() || isSubmitting) return;
+    const nameToAdd = newClassName.trim();
+    const previousClasses = classesList;
+    const optimisticClass: ClassItem = {
+      id: `temp-${Date.now()}`,
+      name: nameToAdd,
+      code: nameToAdd.replace(/\D/g, '') || 'C',
+      sections: [],
+      totalStudents: 0,
+      subjectsCount: 0,
+      classTeacher: 'Unassigned',
+      teacherAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+      status: 'Active',
+    };
+
+    setClassesList((prev) => [optimisticClass, ...prev]);
+    setShowAddClassModal(false);
+    setNewClassName('');
+    showToast(`Created class ${nameToAdd}!`, 'success');
+
     try {
-      await api.academics.createClass(activeInstitutionId, { name: newClassName });
-      setShowAddClassModal(false);
-      setNewClassName('');
-      showToast(`Created class ${newClassName} successfully!`, 'success');
-      await loadAcademics();
+      await api.academics.createClass(activeInstitutionId, { name: nameToAdd });
+      void loadAcademics();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to create class', 'error');
-    } finally {
-      setIsSubmitting(false);
+      setClassesList(previousClasses);
+      setNewClassName(nameToAdd);
+      showToast(err instanceof Error ? err.message : 'Failed to create class', 'error', {
+        label: 'Retry',
+        onClick: () => void handleAddClass(e),
+      });
     }
   };
 
   const handleAddBatch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+    if (!newBatchName.trim() || isSubmitting) return;
+    const nameToAdd = newBatchName.trim();
+    const classToAdd = newBatchClass;
+    const timingToAdd = newBatchTiming;
+    const previousBatches = batchesList;
+    const optimisticBatch: BatchItem = {
+      id: `temp-${Date.now()}`,
+      name: nameToAdd,
+      className: classToAdd,
+      timing: timingToAdd,
+      days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+      studentsCount: 0,
+      teacher: newBatchTeacher || 'Unassigned',
+    };
+
+    setBatchesList((prev) => [optimisticBatch, ...prev]);
+    setShowAddBatchModal(false);
+    setNewBatchName('');
+    showToast(`Created ${nameToAdd} under ${classToAdd}!`, 'success');
+
     try {
       await api.academics.createBatch(activeInstitutionId, {
-        className: newBatchClass,
-        name: newBatchName,
-        timing: newBatchTiming,
+        className: classToAdd,
+        name: nameToAdd,
+        timing: timingToAdd,
       });
-      setShowAddBatchModal(false);
-      setNewBatchName('');
-      showToast(`Created ${newBatchName} under ${newBatchClass}!`, 'success');
-      await loadAcademics();
+      void loadAcademics();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to create batch', 'error');
-    } finally {
-      setIsSubmitting(false);
+      setBatchesList(previousBatches);
+      setNewBatchName(nameToAdd);
+      showToast(err instanceof Error ? err.message : 'Failed to create batch', 'error', {
+        label: 'Retry',
+        onClick: () => void handleAddBatch(e),
+      });
     }
   };
 
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+    if (!newSubjectName.trim() || isSubmitting) return;
+    const nameToAdd = newSubjectName.trim();
+    const codeToAdd = newSubjectCode.trim() || nameToAdd.slice(0, 4).toUpperCase();
+    const isCoreToAdd = newSubjectIsCore;
+    const previousSubjects = subjectsList;
+    const optimisticSubject: SubjectItem = {
+      id: `temp-${Date.now()}`,
+      name: nameToAdd,
+      code: codeToAdd,
+      isCore: isCoreToAdd,
+      classes: ['All Classes'],
+      color: '#6366F1',
+    };
+
+    setSubjectsList((prev) => [optimisticSubject, ...prev]);
+    setShowAddSubjectModal(false);
+    setNewSubjectName('');
+    setNewSubjectCode('');
+    showToast(`Added subject ${nameToAdd}!`, 'success');
+
     try {
       await api.academics.createSubject(activeInstitutionId, {
-        name: newSubjectName,
-        code: newSubjectCode,
-        isCore: newSubjectIsCore,
+        name: nameToAdd,
+        code: codeToAdd,
+        isCore: isCoreToAdd,
       });
-      setShowAddSubjectModal(false);
-      setNewSubjectName('');
-      setNewSubjectCode('');
-      showToast(`Added subject ${newSubjectName}!`, 'success');
-      await loadAcademics();
+      void loadAcademics();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to create subject', 'error');
-    } finally {
-      setIsSubmitting(false);
+      setSubjectsList(previousSubjects);
+      setNewSubjectName(nameToAdd);
+      setNewSubjectCode(codeToAdd);
+      showToast(err instanceof Error ? err.message : 'Failed to create subject', 'error', {
+        label: 'Retry',
+        onClick: () => void handleAddSubject(e),
+      });
     }
   };
 

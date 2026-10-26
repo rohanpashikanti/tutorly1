@@ -171,26 +171,58 @@ export const StudentDirectory: React.FC = () => {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingStudent || isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      await api.students.update(activeInstitutionId, editingStudent.id, {
-        name: editFormData.name,
+    if (!editingStudent) return;
+
+    const previousStudent = editingStudent;
+    const previousStudents = [...students];
+    const previousActiveDrawer = activeDrawerStudent;
+    const studentName = editFormData.name;
+
+    const updatedStudent: Student = {
+      ...previousStudent,
+      name: editFormData.name,
+      class: editFormData.class,
+      batch: editFormData.batch,
+      phone: editFormData.phone,
+      email: editFormData.email,
+      parent: {
+        ...previousStudent.parent,
+        fatherName: editFormData.fatherName,
         phone: editFormData.phone,
         email: editFormData.email,
-        fatherName: editFormData.fatherName,
-        class: editFormData.class,
-        batch: editFormData.batch,
-      });
-      setShowEditModal(false);
-      setEditingStudent(null);
-      showToast(`Updated profile for ${editFormData.name}`, 'success');
-      await loadStudents();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to update student profile', 'error');
-    } finally {
-      setIsSubmitting(false);
+      }
+    };
+
+    // Optimistically update screen immediately
+    setStudents(prev => prev.map(s => s.id === previousStudent.id ? updatedStudent : s));
+    if (activeDrawerStudent?.id === previousStudent.id) {
+      setActiveDrawerStudent(updatedStudent);
     }
+    setShowEditModal(false);
+    setEditingStudent(null);
+    showToast(`Updated profile for ${studentName}`, 'success');
+
+    // Background server call
+    api.students.update(activeInstitutionId, previousStudent.id, {
+      name: editFormData.name,
+      phone: editFormData.phone,
+      email: editFormData.email,
+      fatherName: editFormData.fatherName,
+      class: editFormData.class,
+      batch: editFormData.batch,
+    }).then(() => {
+      void loadStudents();
+    }).catch(err => {
+      // Rollback on failure
+      setStudents(previousStudents);
+      setActiveDrawerStudent(previousActiveDrawer);
+      showToast(err instanceof Error ? err.message : 'Failed to update student profile', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          handleOpenEdit(updatedStudent);
+        }
+      });
+    });
   };
 
   const [deleteConfirmStudent, setDeleteConfirmStudent] = useState<Student | null>(null);

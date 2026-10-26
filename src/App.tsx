@@ -169,6 +169,29 @@ const AppShell: React.FC = () => {
               <span style={{ flex: 1, fontSize: '13px', color: '#1E293B', fontWeight: 500 }}>
                 {toast.message}
               </span>
+              {toast.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissToast(toast.id);
+                    toast.action?.onClick();
+                  }}
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    borderRadius: '5px',
+                    border: '1px solid #CBD5E1',
+                    background: '#FFFFFF',
+                    color: '#0F172A',
+                    cursor: 'pointer',
+                    marginRight: '4px',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  }}
+                >
+                  {toast.action.label}
+                </button>
+              )}
               <button
                 className="btn-icon"
                 onClick={() => dismissToast(toast.id)}

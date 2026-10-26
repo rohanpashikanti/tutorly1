@@ -134,25 +134,49 @@ export const TeacherManagement: React.FC = () => {
 
   const handleEditTeacherSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeDrawerTeacher || isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      await api.teachers.update(activeInstitutionId, activeDrawerTeacher.id, {
-        name: editTeacherData.name,
-        designation: editTeacherData.designation,
-        phone: editTeacherData.phone,
-        status: editTeacherData.status,
-        subjects: editTeacherData.subjects,
-        classes: editTeacherData.classes,
+    if (!activeDrawerTeacher) return;
+
+    const previousTeacher = activeDrawerTeacher;
+    const previousTeachers = [...teachers];
+    const teacherName = editTeacherData.name;
+
+    const updatedTeacher: Teacher = {
+      ...previousTeacher,
+      name: editTeacherData.name,
+      designation: editTeacherData.designation,
+      phone: editTeacherData.phone,
+      status: editTeacherData.status,
+      subjects: editTeacherData.subjects.split(',').map(s => s.trim()).filter(Boolean),
+      classes: editTeacherData.classes.split(',').map(c => c.trim()).filter(Boolean),
+    };
+
+    // Optimistically update screen immediately
+    setTeachers(prev => prev.map(t => t.id === previousTeacher.id ? updatedTeacher : t));
+    setActiveDrawerTeacher(updatedTeacher);
+    setShowEditModal(false);
+    showToast(`Updated teacher details for ${teacherName}`, 'success');
+
+    // Background server call
+    api.teachers.update(activeInstitutionId, previousTeacher.id, {
+      name: editTeacherData.name,
+      designation: editTeacherData.designation,
+      phone: editTeacherData.phone,
+      status: editTeacherData.status,
+      subjects: editTeacherData.subjects,
+      classes: editTeacherData.classes,
+    }).then(() => {
+      void loadTeachers();
+    }).catch(err => {
+      // Rollback on failure
+      setTeachers(previousTeachers);
+      setActiveDrawerTeacher(previousTeacher);
+      showToast(err instanceof Error ? err.message : 'Failed to update teacher', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          handleOpenEdit(updatedTeacher);
+        }
       });
-      setShowEditModal(false);
-      showToast(`Updated teacher details for ${editTeacherData.name}`, 'success');
-      await loadTeachers();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to update teacher', 'error');
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   };
 
   const [deleteConfirmTeacher, setDeleteConfirmTeacher] = useState<Teacher | null>(null);

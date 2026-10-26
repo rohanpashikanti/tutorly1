@@ -3,10 +3,16 @@ import { createAuthClient } from 'better-auth/react';
 import { User, UserRole, Student } from '../types';
 import { getStoredStudents } from '../utils/storage';
 
-interface ToastMessage {
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+export interface ToastMessage {
   id: string;
   type: 'success' | 'info' | 'warning' | 'error';
   message: string;
+  action?: ToastAction;
 }
 
 interface Membership {
@@ -48,7 +54,7 @@ interface AppContextType {
   selectedBatchId: string;
   setSelectedBatchId: (id: string) => void;
   toasts: ToastMessage[];
-  showToast: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  showToast: (message: string, type?: 'success' | 'info' | 'warning' | 'error', action?: ToastAction) => void;
   dismissToast: (id: string) => void;
   isMobileMenuOpen: boolean;
   setIsMobileMenuOpen: (open: boolean) => void;
@@ -173,10 +179,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }), [activeMembership, role, session?.user]);
   const institutionName = institutionNameOverride || activeMembership?.institutionName || '';
 
-  const showToast = (message: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
+  const showToast = (
+    message: string,
+    type: 'success' | 'info' | 'warning' | 'error' = 'success',
+    action?: ToastAction
+  ) => {
     const id = crypto.randomUUID();
-    setToasts((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 4000);
+    setToasts((prev) => [...prev, { id, type, message, action }]);
+    setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), action ? 6000 : 4000);
   };
 
   const dismissToast = (id: string) => setToasts((prev) => prev.filter((toast) => toast.id !== id));

@@ -216,50 +216,85 @@ export const SchoolExaminationsPage: React.FC = () => {
       return;
     }
 
-    try {
-      await api.assessments.saveMarks(
-        activeInstitutionId,
-        selectedExamId,
-        studentMarks.map(s => ({
-          studentId: s.id,
-          marks: typeof s.marks === 'number' ? s.marks : 0,
-          remarks: s.remarks
-        }))
-      );
-      setIsSaved(true);
-      showToast(`Saved marks for ${currentExam?.name || 'Exam'} (${selectedSubject})!`, 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to save marks to database', 'error');
-    }
+    const previousIsSaved = isSaved;
+    // Optimistically update screen immediately
+    setIsSaved(true);
+    showToast(`Saved marks for ${currentExam?.name || 'Exam'} (${selectedSubject})!`, 'success');
+
+    // Send request in background
+    api.assessments.saveMarks(
+      activeInstitutionId,
+      selectedExamId,
+      studentMarks.map(s => ({
+        studentId: s.id,
+        marks: typeof s.marks === 'number' ? s.marks : 0,
+        remarks: s.remarks
+      }))
+    ).catch(err => {
+      // Rollback on failure
+      setIsSaved(previousIsSaved);
+      showToast(err instanceof Error ? err.message : 'Failed to save marks to database', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          void handleSaveMarks();
+        }
+      });
+    });
   };
 
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newExamData.name.trim() || isSubmitting) {
-      if (!newExamData.name.trim()) showToast('Exam name is required', 'error');
+    if (!newExamData.name.trim()) {
+      showToast('Exam name is required', 'error');
       return;
     }
 
-    setIsSubmitting(true);
-    try {
-      const res = await api.assessments.create(activeInstitutionId, {
-        name: newExamData.name.trim(),
-        type: 'school_exam',
-        class: newExamData.classes,
-        dateTime: newExamData.startDate,
-        maxMarks: 100
-      });
+    const examName = newExamData.name.trim();
+    const tempId = `temp-${Date.now()}`;
+    const previousExams = [...exams];
+    const previousSelectedExamId = selectedExamId;
+
+    const optimisticExam: Exam = {
+      id: tempId,
+      name: examName,
+      type: newExamData.type,
+      classes: newExamData.classes,
+      subjectsCount: 5,
+      startDate: newExamData.startDate,
+      endDate: newExamData.endDate,
+      status: 'Upcoming',
+      academicYear: '2026-2027'
+    };
+
+    // Optimistically update screen immediately
+    setExams(prev => [optimisticExam, ...prev]);
+    setSelectedExamId(tempId);
+    setShowCreateModal(false);
+    showToast(`School Examination "${examName}" created!`, 'success');
+
+    // Background server call
+    api.assessments.create(activeInstitutionId, {
+      name: examName,
+      type: 'school_exam',
+      class: newExamData.classes,
+      dateTime: newExamData.startDate,
+      maxMarks: 100
+    }).then(res => {
       if (res && res.assessmentId) {
         setSelectedExamId(res.assessmentId);
       }
-      await refreshExams();
-      setShowCreateModal(false);
-      showToast(`School Examination "${newExamData.name}" created!`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create examination', 'error');
-    } finally {
-      setIsSubmitting(false);
-    }
+      void refreshExams();
+    }).catch((err: any) => {
+      // Rollback on failure
+      setExams(previousExams);
+      setSelectedExamId(previousSelectedExamId);
+      showToast(err.message || 'Failed to create examination', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          setShowCreateModal(true);
+        }
+      });
+    });
   };
 
   const handleDeleteExam = async (id: string, name: string) => {

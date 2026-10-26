@@ -227,54 +227,92 @@ export const TuitionTestsPage: React.FC = () => {
       return;
     }
 
-    try {
-      await api.assessments.saveMarks(
-        activeInstitutionId,
-        selectedTestId,
-        studentMarks.map(s => ({
-          studentId: s.id,
-          marks: typeof s.marks === 'number' ? s.marks : 0,
-          remarks: s.remarks
-        }))
-      );
-      setIsSaved(true);
-      showToast(`Saved marks for ${currentTest?.name || 'Tuition Test'}!`, 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to save marks to database', 'error');
-    }
+    const previousIsSaved = isSaved;
+    // Optimistically update screen immediately
+    setIsSaved(true);
+    showToast(`Saved marks for ${currentTest?.name || 'Tuition Test'}!`, 'success');
+
+    // Send request in background
+    api.assessments.saveMarks(
+      activeInstitutionId,
+      selectedTestId,
+      studentMarks.map(s => ({
+        studentId: s.id,
+        marks: typeof s.marks === 'number' ? s.marks : 0,
+        remarks: s.remarks
+      }))
+    ).catch(err => {
+      // Rollback on failure
+      setIsSaved(previousIsSaved);
+      showToast(err instanceof Error ? err.message : 'Failed to save marks to database', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          void handleSaveMarks();
+        }
+      });
+    });
   };
 
   const handleCreateTest = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTestData.name.trim() || isSubmitting) {
-      if (!newTestData.name.trim()) showToast('Test name is required', 'error');
+    if (!newTestData.name.trim()) {
+      showToast('Test name is required', 'error');
       return;
     }
 
-    setIsSubmitting(true);
-    try {
-      const res = await api.assessments.create(activeInstitutionId, {
-        name: newTestData.name.trim(),
-        type: 'tuition_test',
-        class: newTestData.class,
-        batch: newTestData.batch,
-        subject: newTestData.subject,
-        maxMarks: newTestData.maxMarks,
-        durationMinutes: newTestData.durationMinutes,
-        dateTime: newTestData.dateTime
-      });
+    const testName = newTestData.name.trim();
+    const tempId = `temp-${Date.now()}`;
+    const previousTests = [...tests];
+    const previousSelectedTestId = selectedTestId;
+    const previousMaxMarks = maxMarks;
+
+    const optimisticTest: TuitionTest = {
+      id: tempId,
+      name: testName,
+      type: newTestData.type,
+      class: newTestData.class,
+      batch: newTestData.batch,
+      subject: newTestData.subject,
+      dateTime: newTestData.dateTime,
+      durationMinutes: newTestData.durationMinutes,
+      maxMarks: newTestData.maxMarks,
+      status: 'Upcoming'
+    };
+
+    // Optimistically update UI immediately
+    setTests(prev => [optimisticTest, ...prev]);
+    setSelectedTestId(tempId);
+    setMaxMarks(newTestData.maxMarks);
+    setShowCreateModal(false);
+    showToast(`Created new Tuition Test: "${testName}"`, 'success');
+
+    // Background server call
+    api.assessments.create(activeInstitutionId, {
+      name: testName,
+      type: 'tuition_test',
+      class: newTestData.class,
+      batch: newTestData.batch,
+      subject: newTestData.subject,
+      maxMarks: newTestData.maxMarks,
+      durationMinutes: newTestData.durationMinutes,
+      dateTime: newTestData.dateTime
+    }).then(res => {
       if (res && res.assessmentId) {
         setSelectedTestId(res.assessmentId);
-        setMaxMarks(newTestData.maxMarks);
       }
-      await refreshTests();
-      setShowCreateModal(false);
-      showToast(`Created new Tuition Test: "${newTestData.name}"`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create test', 'error');
-    } finally {
-      setIsSubmitting(false);
-    }
+      void refreshTests();
+    }).catch((err: any) => {
+      // Rollback on failure
+      setTests(previousTests);
+      setSelectedTestId(previousSelectedTestId);
+      setMaxMarks(previousMaxMarks);
+      showToast(err.message || 'Failed to create test', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          setShowCreateModal(true);
+        }
+      });
+    });
   };
 
   const handleDeleteTest = async (id: string, name: string) => {

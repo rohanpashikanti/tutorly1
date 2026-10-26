@@ -133,32 +133,50 @@ export const StudentProfilePage: React.FC = () => {
     showToast(`${student.name} promoted to ${promoteClass} for ${promoteYear}.`, 'success');
   };
 
-  const handleEditSubmit = async (e: React.FormEvent) => {
+  const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      if (activeInstitutionId) {
-        await api.students.update(activeInstitutionId, student.id, {
-          name: editFormData.name,
-          phone: editFormData.phone,
-          email: editFormData.email,
-        });
+    const previousStudent = student;
+    const studentName = editFormData.name;
+
+    const updatedStudent: Student = {
+      ...student,
+      name: editFormData.name,
+      class: editFormData.class,
+      batch: editFormData.batch,
+      phone: editFormData.phone,
+      email: editFormData.email,
+      parent: {
+        ...student.parent,
+        fatherName: editFormData.fatherName,
+        phone: editFormData.phone,
+        email: editFormData.email,
       }
-      setStudent({
-        ...student,
+    };
+
+    // Optimistically update screen immediately
+    setStudent(updatedStudent);
+    setShowEditModal(false);
+    showToast(`Updated profile for ${studentName}`, 'success');
+
+    // Send request in background
+    if (activeInstitutionId) {
+      api.students.update(activeInstitutionId, student.id, {
         name: editFormData.name,
+        phone: editFormData.phone,
+        email: editFormData.email,
+        fatherName: editFormData.fatherName,
         class: editFormData.class,
         batch: editFormData.batch,
-        parent: {
-          ...student.parent,
-          fatherName: editFormData.fatherName,
-          phone: editFormData.phone,
-          email: editFormData.email,
-        }
+      }).catch(err => {
+        // Rollback on failure
+        setStudent(previousStudent);
+        showToast(err instanceof Error ? err.message : 'Failed to update student', 'error', {
+          label: 'Retry',
+          onClick: () => {
+            setShowEditModal(true);
+          }
+        });
       });
-      setShowEditModal(false);
-      showToast(`Updated profile for ${editFormData.name}`, 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to update student', 'error');
     }
   };
 

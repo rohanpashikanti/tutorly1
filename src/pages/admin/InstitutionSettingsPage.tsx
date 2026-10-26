@@ -25,7 +25,7 @@ import {
 } from '../../utils/storage';
 
 export const InstitutionSettingsPage: React.FC = () => {
-  const { showToast, setInstitutionName, activeInstitutionId } = useApp();
+  const { showToast, setInstitutionName, activeInstitutionId, institutionName } = useApp();
   const [activeTab, setActiveTab] = useState<'General' | 'Academic' | 'Tuition Fees' | 'System Preferences' | 'Backup'>('General');
   const [isSaved, setIsSaved] = useState(false);
 
@@ -120,18 +120,32 @@ export const InstitutionSettingsPage: React.FC = () => {
       feeReminders
     };
 
-    try {
-      await api.settings.update(activeInstitutionId, newSettings);
-    } catch {
-      // Local fallback
-    }
+    const previousStoredSettings = getStoredInstitutionSettings();
+    const previousInstitutionName = institutionName;
 
+    // Optimistically update screen immediately
     saveStoredInstitutionSettings(newSettings);
     if (setInstitutionName) {
       setInstitutionName(name.trim());
     }
     setIsSaved(true);
     showToast('Institution settings saved and persisted successfully!', 'success');
+
+    // Background server call
+    api.settings.update(activeInstitutionId, newSettings).catch(err => {
+      // Rollback on failure
+      saveStoredInstitutionSettings(previousStoredSettings);
+      if (setInstitutionName) {
+        setInstitutionName(previousInstitutionName);
+      }
+      setIsSaved(false);
+      showToast(err instanceof Error ? err.message : 'Failed to sync settings with server', 'error', {
+        label: 'Retry',
+        onClick: () => {
+          handleSave();
+        }
+      });
+    });
   };
 
   const handleResetDefaults = () => {
