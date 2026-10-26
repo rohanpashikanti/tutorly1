@@ -43,7 +43,8 @@ export const AdminDashboard: React.FC = () => {
     monthlyCollections: any[];
   } | null>(null);
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [classList, setClassList] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,21 +65,29 @@ export const AdminDashboard: React.FC = () => {
         showToast(msg, 'error');
       })
       .finally(() => setIsLoading(false));
+
+    api.academics.getOverview(activeInstitutionId)
+      .then((res) => {
+        if (res?.classes) {
+          setClassList(res.classes.map((c) => c.name));
+        }
+      })
+      .catch(() => {});
   }, [activeInstitutionId, showToast]);
 
   const totalStudentsDisplay = summary?.stats ? summary.stats.totalStudents : 0;
   const totalTeachersDisplay = summary?.stats ? summary.stats.totalTeachers : 0;
   const totalClassesDisplay = summary?.stats ? summary.stats.totalClasses + summary.stats.totalBatches : 0;
   const totalMarkedToday = summary?.stats ? summary.stats.todayPresentCount + summary.stats.todayAbsentCount : 0;
-  const attendanceRateDisplay = totalMarkedToday > 0 && summary ? `${summary.stats.todayAttendanceRate}%` : '0%';
+  const attendanceRateDisplay = totalMarkedToday > 0 && summary ? `${summary.stats.todayAttendanceRate}%` : '—';
   const attendanceSubtextDisplay = totalMarkedToday > 0 && summary
     ? `${summary.stats.todayPresentCount} Present | ${summary.stats.todayAbsentCount} Absent`
-    : 'No sessions marked today';
+    : 'No attendance recorded yet';
 
   const currentMonthRupees = summary?.stats ? summary.stats.currentMonthFees : 0;
   const feeInfo = {
     amount: `₹${currentMonthRupees.toLocaleString('en-IN')}`,
-    subtext: 'Total collected this month',
+    subtext: currentMonthRupees > 0 ? 'Total collected this month' : 'No payments collected yet',
   };
 
   const monthlyTrendData = (summary?.monthlyCollections || []).map((m: any) => ({
@@ -195,10 +204,10 @@ export const AdminDashboard: React.FC = () => {
                 onChange={(e) => setPerformanceClass(e.target.value)}
                 style={{ fontSize: '11.5px', padding: '4px 8px' }}
               >
-                <option>All Classes</option>
-                <option>Class 10</option>
-                <option>Class 9</option>
-                <option>Class 8</option>
+                <option value="All Classes">All Classes</option>
+                {classList.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -224,8 +233,8 @@ export const AdminDashboard: React.FC = () => {
               value={totalMarkedToday > 0 && summary ? summary.stats.todayAttendanceRate : 0}
               size={130}
               strokeWidth={14}
-              label={totalMarkedToday > 0 && summary ? `${summary.stats.todayAttendanceRate}%` : '0%'}
-              sublabel="Present"
+              label={totalMarkedToday > 0 && summary ? `${summary.stats.todayAttendanceRate}%` : '—'}
+              sublabel={totalMarkedToday > 0 ? "Present" : "No records"}
               color="#6366F1"
             />
 

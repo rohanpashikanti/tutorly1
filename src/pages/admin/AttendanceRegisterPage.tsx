@@ -16,6 +16,8 @@ import { downloadCSV } from '../../utils/demoActions';
 import { getStoredAttendanceSessions, saveStoredAttendanceSession, AttendanceSession } from '../../utils/storage';
 import { api } from '../../api/client';
 
+import { ClassItem, BatchItem } from '../../types';
+
 export type AttendanceStatus = 'P' | 'A' | 'L' | null;
 
 interface StudentAttItem {
@@ -30,11 +32,16 @@ interface StudentAttItem {
 }
 
 export const AttendanceRegisterPage: React.FC = () => {
-  const { role, showToast, activeInstitutionId } = useApp();
+  const { role, showToast, activeInstitutionId, navigateTo } = useApp();
+
+  // Dynamic classes and batches
+  const [classesList, setClassesList] = useState<ClassItem[]>([]);
+  const [batchesList, setBatchesList] = useState<BatchItem[]>([]);
+  const [hasLoadedAcademics, setHasLoadedAcademics] = useState(false);
 
   // Selected Class, Batch & Date
-  const [selectedClass, setSelectedClass] = useState<string>('Class 10');
-  const [selectedBatch, setSelectedBatch] = useState<string>('Batch A');
+  const [selectedClass, setSelectedClass] = useState<string>('');
+  const [selectedBatch, setSelectedBatch] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // Attendance Records State
@@ -44,8 +51,36 @@ export const AttendanceRegisterPage: React.FC = () => {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [attemptedSaveWithIncomplete, setAttemptedSaveWithIncomplete] = useState<boolean>(false);
 
-  const loadAttendance = React.useCallback(async () => {
+  useEffect(() => {
     if (!activeInstitutionId) return;
+    api.academics.getOverview(activeInstitutionId)
+      .then((res) => {
+        const cls = res?.classes || [];
+        const bth = res?.batches || [];
+        setClassesList(cls);
+        setBatchesList(bth);
+        setHasLoadedAcademics(true);
+        if (cls.length > 0) {
+          setSelectedClass(cls[0].name);
+          const firstClassBatches = bth.filter((b) => b.className === cls[0].name || b.classId === cls[0].id);
+          setSelectedBatch(firstClassBatches[0]?.name || '');
+        } else {
+          setSelectedClass('');
+          setSelectedBatch('');
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load classes/batches for attendance:', err);
+        setHasLoadedAcademics(true);
+      });
+  }, [activeInstitutionId]);
+
+  const loadAttendance = React.useCallback(async () => {
+    if (!activeInstitutionId || !selectedClass) {
+      setStudents([]);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setLoadError(null);
     try {
@@ -241,11 +276,20 @@ export const AttendanceRegisterPage: React.FC = () => {
               className="select-field"
               style={{ fontWeight: 600, fontSize: '13px', minWidth: '130px', padding: '8px 12px' }}
               value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
+              onChange={(e) => {
+                const newClass = e.target.value;
+                setSelectedClass(newClass);
+                const classBatches = batchesList.filter((b) => b.className === newClass || b.classId === classesList.find((c) => c.name === newClass)?.id);
+                setSelectedBatch(classBatches[0]?.name || '');
+              }}
             >
-              <option value="Class 10">Class 10</option>
-              <option value="Class 9">Class 9</option>
-              <option value="Class 8">Class 8</option>
+              {classesList.length === 0 ? (
+                <option value="">No classes configured</option>
+              ) : (
+                classesList.map((c) => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -254,16 +298,27 @@ export const AttendanceRegisterPage: React.FC = () => {
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>
               Batch
             </label>
-            <select
-              className="select-field"
-              style={{ fontWeight: 600, fontSize: '13px', minWidth: '130px', padding: '8px 12px' }}
-              value={selectedBatch}
-              onChange={(e) => setSelectedBatch(e.target.value)}
-            >
-              <option value="Batch A">Batch A (Morning)</option>
-              <option value="Batch B">Batch B (Evening)</option>
-              <option value="Batch C">Batch C (Weekend)</option>
-            </select>
+            {(() => {
+              const availableBatches = batchesList.filter(
+                (b) => b.className === selectedClass || b.classId === classesList.find((c) => c.name === selectedClass)?.id
+              );
+              return (
+                <select
+                  className="select-field"
+                  style={{ fontWeight: 600, fontSize: '13px', minWidth: '130px', padding: '8px 12px' }}
+                  value={selectedBatch}
+                  onChange={(e) => setSelectedBatch(e.target.value)}
+                >
+                  {availableBatches.length === 0 ? (
+                    <option value="">No batches configured</option>
+                  ) : (
+                    availableBatches.map((b) => (
+                      <option key={b.id} value={b.name}>{b.name}</option>
+                    ))
+                  )}
+                </select>
+              );
+            })()}
           </div>
 
           {/* Date Selector */}

@@ -18,7 +18,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Exam } from '../../types';
+import { Exam, ClassItem, SubjectItem } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
 import { api } from '../../api/client';
@@ -43,11 +43,15 @@ export const SchoolExaminationsPage: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
   const [activeTab, setActiveTab] = useState<'Marks Entry' | 'Results & Ranking' | 'All Examinations'>('Marks Entry');
 
+  // Dynamic classes and subjects
+  const [classesList, setClassesList] = useState<ClassItem[]>([]);
+  const [subjectsList, setSubjectsList] = useState<SubjectItem[]>([]);
+
   // Stored exams & marks
   const [exams, setExams] = useState<Exam[]>(() => getStoredSchoolExams());
   const [selectedExamId, setSelectedExamId] = useState<string>(() => exams[0]?.id || '');
-  const [selectedClass, setSelectedClass] = useState('Class 10');
-  const [selectedSubject, setSelectedSubject] = useState('Mathematics');
+  const [selectedClass, setSelectedClass] = useState('');
+  const [selectedSubject, setSelectedSubject] = useState('');
   const [maxMarks, setMaxMarks] = useState<number>(100);
   const [examDate, setExamDate] = useState('2026-10-25');
   const [isSaved, setIsSaved] = useState(false);
@@ -62,10 +66,25 @@ export const SchoolExaminationsPage: React.FC = () => {
   const [newExamData, setNewExamData] = useState({
     name: '',
     type: 'Term Exam' as Exam['type'],
-    classes: 'Class 10',
+    classes: '',
     startDate: '2026-11-10',
     endDate: '2026-11-20'
   });
+
+  useEffect(() => {
+    if (!activeInstitutionId) return;
+    api.academics.getOverview(activeInstitutionId)
+      .then((res) => {
+        const cls = res?.classes || [];
+        const sub = res?.subjects || [];
+        setClassesList(cls);
+        setSubjectsList(sub);
+        setSelectedClass(prev => prev || cls[0]?.name || '');
+        setSelectedSubject(prev => prev || sub[0]?.name || '');
+        setNewExamData(d => ({ ...d, classes: cls[0]?.name || '' }));
+      })
+      .catch(() => {});
+  }, [activeInstitutionId]);
 
   // Load exams from API
   const refreshExams = async () => {
@@ -376,9 +395,13 @@ export const SchoolExaminationsPage: React.FC = () => {
               onChange={(e) => setSelectedExamId(e.target.value)}
               style={{ minWidth: '180px' }}
             >
-              {exams.map(e => (
-                <option key={e.id} value={e.id}>{e.name} ({e.type})</option>
-              ))}
+              {exams.length === 0 ? (
+                <option value="">No examinations created</option>
+              ) : (
+                exams.map(e => (
+                  <option key={e.id} value={e.id}>{e.name} ({e.type})</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -391,9 +414,13 @@ export const SchoolExaminationsPage: React.FC = () => {
               value={selectedClass}
               onChange={(e) => setSelectedClass(e.target.value)}
             >
-              <option value="Class 10">Class 10</option>
-              <option value="Class 9">Class 9</option>
-              <option value="Class 8">Class 8</option>
+              {classesList.length === 0 ? (
+                <option value="">No classes configured</option>
+              ) : (
+                classesList.map(c => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -406,11 +433,13 @@ export const SchoolExaminationsPage: React.FC = () => {
               value={selectedSubject}
               onChange={(e) => setSelectedSubject(e.target.value)}
             >
-              <option value="Mathematics">Mathematics</option>
-              <option value="Science">Science</option>
-              <option value="English">English</option>
-              <option value="Social Studies">Social Studies</option>
-              <option value="First Language">First Language</option>
+              {subjectsList.length === 0 ? (
+                <option value="">No subjects configured</option>
+              ) : (
+                subjectsList.map(s => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -462,9 +491,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Class Average</div>
-            <div className="stat-value">{avgPct}%</div>
+            <div className="stat-value">{validMarks.length > 0 ? `${avgPct}%` : '—'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Avg: {avgMarks} / {maxMarks}</span>
+              <span className="stat-subtext">{validMarks.length > 0 ? `Avg: ${avgMarks} / ${maxMarks}` : 'No results recorded'}</span>
             </div>
           </div>
         </div>
@@ -475,9 +504,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Highest Score</div>
-            <div className="stat-value">{highestMark} <span style={{ fontSize: '13px', color: '#64748B' }}>/ {maxMarks}</span></div>
+            <div className="stat-value">{validMarks.length > 0 ? `${highestMark} / ${maxMarks}` : '—'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{Math.round((highestMark / maxMarks) * 100)}% Top Marks</span>
+              <span className="stat-subtext">{validMarks.length > 0 ? `${Math.round((highestMark / maxMarks) * 100)}% Top Marks` : 'No marks recorded'}</span>
             </div>
           </div>
         </div>
@@ -488,9 +517,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Pass Percentage</div>
-            <div className="stat-value">{passRate}%</div>
+            <div className="stat-value">{validMarks.length > 0 ? `${passRate}%` : '—'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{passedCount} of {studentMarks.length} students</span>
+              <span className="stat-subtext">{validMarks.length > 0 ? `${passedCount} of ${studentMarks.length} students` : 'No results recorded'}</span>
             </div>
           </div>
         </div>
@@ -501,9 +530,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Exam Status</div>
-            <div className="stat-value" style={{ fontSize: '17px' }}>{currentExam?.status || 'Scheduled'}</div>
+            <div className="stat-value" style={{ fontSize: '17px' }}>{currentExam ? currentExam.status : 'No exam scheduled'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{currentExam?.academicYear || '2026 - 2027'}</span>
+              <span className="stat-subtext">{currentExam ? (currentExam.academicYear || 'Active Session') : '—'}</span>
             </div>
           </div>
         </div>
@@ -1007,11 +1036,13 @@ export const SchoolExaminationsPage: React.FC = () => {
                       onChange={(e) => setNewExamData({ ...newExamData, classes: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option value="Class 10">Class 10</option>
-                      <option value="Class 9">Class 9</option>
-                      <option value="Class 8">Class 8</option>
-                      <option value="Classes 6 - 10">Classes 6 - 10</option>
-                      <option value="Classes 6 - 12">Classes 6 - 12</option>
+                      {classesList.length === 0 ? (
+                        <option value="">No classes configured</option>
+                      ) : (
+                        classesList.map(c => (
+                          <option key={c.id} value={c.name}>{c.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>

@@ -110,7 +110,7 @@ academicsRouter.get('/:institutionId/academics/overview', async (c) => {
       id: c.id,
       name: c.name,
       code: c.code || c.name.replace(/\D/g, '') || 'C',
-      sections: classSectionsMap.get(c.id) || ['Batch A'],
+      sections: classSectionsMap.get(c.id) || [],
       totalStudents: c.total_students || 0,
       subjectsCount: subjectsRaw.results.length,
       classTeacher: teacherInfo.name,
@@ -136,7 +136,7 @@ academicsRouter.get('/:institutionId/academics/overview', async (c) => {
       classId: b.class_id,
       timing,
       studentsCount: b.students_count || 0,
-      teacher: batchTeacherMap.get(b.id) || 'Assigned Faculty',
+      teacher: batchTeacherMap.get(b.id) || 'Unassigned',
       days,
     };
   });
@@ -152,13 +152,14 @@ academicsRouter.get('/:institutionId/academics/overview', async (c) => {
 
   // Academic Years
   const academicYearsRaw = await DB.prepare(
-    `SELECT id, name, starts_on, ends_on, status
-     FROM academic_years
-     WHERE institution_id = ?
-     ORDER BY starts_on DESC`
+    `SELECT ay.id, ay.name, ay.starts_on, ay.ends_on, ay.status, ay.created_at, ay.updated_at,
+            (SELECT COUNT(DISTINCT e.student_id) FROM enrollments e WHERE e.institution_id = ay.institution_id AND e.academic_year_id = ay.id AND e.status = 'active') AS enrolled_students
+     FROM academic_years ay
+     WHERE ay.institution_id = ?
+     ORDER BY ay.starts_on DESC`
   )
     .bind(instId)
-    .all<{ id: string; name: string; starts_on: string; ends_on: string; status: string }>();
+    .all<{ id: string; name: string; starts_on: string; ends_on: string; status: string; created_at: string; updated_at: string; enrolled_students: number }>();
 
   return c.json({
     classes,
@@ -166,6 +167,244 @@ academicsRouter.get('/:institutionId/academics/overview', async (c) => {
     subjects,
     academicYears: academicYearsRaw.results,
   });
+});
+
+// Academic Years CRUD
+academicsRouter.get('/:institutionId/academic-years', async (c) => {
+  const auth = await authenticateInstitution(c);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const raw = await c.env.DB.prepare(
+    `SELECT ay.id, ay.name, ay.starts_on, ay.ends_on, ay.status, ay.created_at, ay.updated_at,
+            (SELECT COUNT(DISTINCT e.student_id) FROM enrollments e WHERE e.institution_id = ay.institution_id AND e.academic_year_id = ay.id AND e.status = 'active') AS enrolled_students
+     FROM academic_years ay
+     WHERE ay.institution_id = ?
+     ORDER BY ay.starts_on DESC`
+  )
+    .bind(auth.institutionId)
+    .all<{
+      id: string;
+      name: string;
+      starts_on: string;
+      ends_on: string;
+      status: string;
+      created_at: string;
+      updated_at: string;
+      enrolled_students: number;
+    }>();
+
+  return c.json({ academicYears: raw.results });
+});
+
+academicsRouter.post('/:institutionId/academic-years', async (c) => {
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const body = await readJson(c);
+  if (!body) return c.json({ error: 'Request body required' }, 400);
+
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const startsOn = typeof body.startsOn === 'string' ? body.startsOn.trim() : '';
+  const endsOn = typeof body.endsOn === 'string' ? body.endsOn.trim() : '';
+  let status = typeof body.status === 'string' ? body.status.toLowerCase().trim() : 'planned';
+  if (!['planned', 'active', 'completed', 'archived'].includes(status)) {
+    status = 'planned';
+  }
+
+  if (name.length < 1 || name.length > 80) {
+    return c.json({ error: 'Academic year name must be between 1 and 80 characters' }, 400);
+  }
+  if (!startsOn || !endsOn) {
+    return c.json({ error: 'Start date and End date are required' }, 400);
+  }
+  if (endsOn < startsOn) {
+    return c.json({ error: 'End date cannot precede start date' }, 400);
+  }
+
+  const id = `ay-${crypto.randomUUID().slice(0, 8)}`;
+
+  try {
+    if (status === 'active') {
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `UPDATE academic_years SET status = 'completed', updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+           WHERE institution_id = ? AND status = 'active'`
+        ).bind(auth.institutionId),
+        c.env.DB.prepare(
+          `INSERT INTO academic_years (id, institution_id, name, starts_on, ends_on, status)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(id, auth.institutionId, name, startsOn, endsOn, status),
+      ]);
+    } else {
+      await c.env.DB.prepare(
+        `INSERT INTO academic_years (id, institution_id, name, starts_on, ends_on, status)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(id, auth.institutionId, name, startsOn, endsOn, status).run();
+    }
+  } catch (err: any) {
+    console.error('Create academic year error:', err);
+    if (err?.message?.includes('UNIQUE') || err?.message?.includes('constraint')) {
+      return c.json({ error: 'An academic year with this name already exists' }, 409);
+    }
+    return c.json({ error: 'Failed to create academic year' }, 500);
+  }
+
+  return c.json({
+    success: true,
+    academicYear: {
+      id,
+      name,
+      starts_on: startsOn,
+      ends_on: endsOn,
+      status,
+    },
+  }, 201);
+});
+
+academicsRouter.put('/:institutionId/academic-years/:id', async (c) => {
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const id = c.req.param('id');
+  const body = await readJson(c);
+  if (!body) return c.json({ error: 'Request body required' }, 400);
+
+  const existing = await c.env.DB.prepare(
+    `SELECT id, name, starts_on, ends_on, status FROM academic_years WHERE id = ? AND institution_id = ?`
+  ).bind(id, auth.institutionId).first<{ id: string; name: string; starts_on: string; ends_on: string; status: string }>();
+
+  if (!existing) return c.json({ error: 'Academic year not found' }, 404);
+
+  const name = typeof body.name === 'string' ? body.name.trim() : existing.name;
+  const startsOn = typeof body.startsOn === 'string' ? body.startsOn.trim() : existing.starts_on;
+  const endsOn = typeof body.endsOn === 'string' ? body.endsOn.trim() : existing.ends_on;
+  let status = typeof body.status === 'string' ? body.status.toLowerCase().trim() : existing.status;
+  if (!['planned', 'active', 'completed', 'archived'].includes(status)) {
+    status = existing.status;
+  }
+
+  if (name.length < 1 || name.length > 80) {
+    return c.json({ error: 'Academic year name must be between 1 and 80 characters' }, 400);
+  }
+  if (!startsOn || !endsOn) {
+    return c.json({ error: 'Start date and End date are required' }, 400);
+  }
+  if (endsOn < startsOn) {
+    return c.json({ error: 'End date cannot precede start date' }, 400);
+  }
+
+  try {
+    if (status === 'active' && existing.status !== 'active') {
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `UPDATE academic_years SET status = 'completed', updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+           WHERE institution_id = ? AND status = 'active' AND id != ?`
+        ).bind(auth.institutionId, id),
+        c.env.DB.prepare(
+          `UPDATE academic_years
+           SET name = ?, starts_on = ?, ends_on = ?, status = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+           WHERE id = ? AND institution_id = ?`
+        ).bind(name, startsOn, endsOn, status, id, auth.institutionId),
+      ]);
+    } else {
+      await c.env.DB.prepare(
+        `UPDATE academic_years
+         SET name = ?, starts_on = ?, ends_on = ?, status = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         WHERE id = ? AND institution_id = ?`
+      ).bind(name, startsOn, endsOn, status, id, auth.institutionId).run();
+    }
+  } catch (err: any) {
+    console.error('Update academic year error:', err);
+    if (err?.message?.includes('UNIQUE') || err?.message?.includes('constraint')) {
+      return c.json({ error: 'An academic year with this name already exists' }, 409);
+    }
+    return c.json({ error: 'Failed to update academic year' }, 500);
+  }
+
+  return c.json({
+    success: true,
+    academicYear: { id, name, starts_on: startsOn, ends_on: endsOn, status },
+  });
+});
+
+academicsRouter.put('/:institutionId/academic-years/:id/activate', async (c) => {
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare(
+    `SELECT id, status FROM academic_years WHERE id = ? AND institution_id = ?`
+  ).bind(id, auth.institutionId).first<{ id: string; status: string }>();
+
+  if (!existing) return c.json({ error: 'Academic year not found' }, 404);
+
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE academic_years SET status = 'completed', updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         WHERE institution_id = ? AND status = 'active' AND id != ?`
+      ).bind(auth.institutionId, id),
+      c.env.DB.prepare(
+        `UPDATE academic_years SET status = 'active', updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         WHERE id = ? AND institution_id = ?`
+      ).bind(id, auth.institutionId),
+    ]);
+  } catch (err) {
+    console.error('Activate academic year error:', err);
+    return c.json({ error: 'Failed to activate academic year' }, 500);
+  }
+
+  return c.json({ success: true, activeId: id });
+});
+
+academicsRouter.put('/:institutionId/academic-years/:id/archive', async (c) => {
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const id = c.req.param('id');
+  try {
+    await c.env.DB.prepare(
+      `UPDATE academic_years SET status = 'archived', updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       WHERE id = ? AND institution_id = ?`
+    ).bind(id, auth.institutionId).run();
+  } catch (err) {
+    console.error('Archive academic year error:', err);
+    return c.json({ error: 'Failed to archive academic year' }, 500);
+  }
+
+  return c.json({ success: true, archivedId: id });
+});
+
+academicsRouter.delete('/:institutionId/academic-years/:id', async (c) => {
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
+  if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const id = c.req.param('id');
+
+  const [enrollmentsCount, sessionsCount, assessmentsCount, eventsCount] = await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM enrollments WHERE institution_id = ? AND academic_year_id = ?').bind(auth.institutionId, id).first<{ c: number }>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM attendance_sessions WHERE institution_id = ? AND academic_year_id = ?').bind(auth.institutionId, id).first<{ c: number }>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM assessments WHERE institution_id = ? AND academic_year_id = ?').bind(auth.institutionId, id).first<{ c: number }>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM calendar_events WHERE institution_id = ? AND academic_year_id = ?').bind(auth.institutionId, id).first<{ c: number }>(),
+  ]);
+
+  const totalDeps = (enrollmentsCount?.c || 0) + (sessionsCount?.c || 0) + (assessmentsCount?.c || 0) + (eventsCount?.c || 0);
+  if (totalDeps > 0) {
+    return c.json({
+      error: 'Cannot delete academic year with existing enrollments, attendance, assessments, or events. Please archive it instead.',
+    }, 400);
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `DELETE FROM academic_years WHERE id = ? AND institution_id = ?`
+    ).bind(id, auth.institutionId).run();
+  } catch (err) {
+    console.error('Delete academic year error:', err);
+    return c.json({ error: 'Failed to delete academic year' }, 500);
+  }
+
+  return c.json({ success: true, deletedId: id });
 });
 
 academicsRouter.post('/:institutionId/classes', async (c) => {
@@ -189,15 +428,6 @@ academicsRouter.post('/:institutionId/classes', async (c) => {
        VALUES (?, ?, ?, ?, 'active')`
     )
       .bind(id, auth.institutionId, name, code)
-      .run();
-
-    // Automatically create a default Batch A for the new class
-    const batchId = `bth-${crypto.randomUUID().slice(0, 8)}`;
-    await c.env.DB.prepare(
-      `INSERT INTO batches (id, institution_id, class_id, name, starts_at, ends_at, meeting_days_json, status)
-       VALUES (?, ?, ?, 'Batch A', '04:30 PM', '06:30 PM', '["Mon","Tue","Wed","Thu","Fri"]', 'active')`
-    )
-      .bind(batchId, auth.institutionId, id)
       .run();
   } catch (err) {
     console.error('Create class error:', err);

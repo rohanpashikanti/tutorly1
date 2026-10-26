@@ -23,6 +23,8 @@ export const AttendanceReportsPage: React.FC = () => {
   const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
+  const [batchesList, setBatchesList] = useState<{ id: string; name: string }[]>([]);
   const [reports, setReports] = useState<{
     overallRate: number;
     presentCount: number;
@@ -42,11 +44,14 @@ export const AttendanceReportsPage: React.FC = () => {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [stuRes, repRes] = await Promise.all([
+      const [stuRes, repRes, overRes] = await Promise.all([
         api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
-        api.attendance.getReports(activeInstitutionId).catch(() => null)
+        api.attendance.getReports(activeInstitutionId).catch(() => null),
+        api.academics.getOverview(activeInstitutionId).catch(() => null)
       ]);
       setStudents(stuRes.students || []);
+      setClassesList(overRes?.classes || []);
+      setBatchesList(overRes?.batches || []);
 
       if (repRes) {
         setReports({
@@ -164,9 +169,9 @@ export const AttendanceReportsPage: React.FC = () => {
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Class</label>
             <select className="select-field" value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
               <option>All Classes</option>
-              <option>Class 10</option>
-              <option>Class 9</option>
-              <option>Class 8</option>
+              {classesList.map((c) => (
+                <option key={c.id || c.name} value={c.name}>{c.name}</option>
+              ))}
             </select>
           </div>
 
@@ -174,8 +179,9 @@ export const AttendanceReportsPage: React.FC = () => {
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Batch</label>
             <select className="select-field" value={selectedBatch} onChange={(e) => setSelectedBatch(e.target.value)}>
               <option>All Batches</option>
-              <option>Batch A</option>
-              <option>Batch B</option>
+              {batchesList.map((b) => (
+                <option key={b.id || b.name} value={b.name}>{b.name}</option>
+              ))}
             </select>
           </div>
 
@@ -205,9 +211,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Overall Attendance</div>
-            <div className="stat-value">{isLoading ? '—' : `${reports.overallRate}%`}</div>
+            <div className="stat-value">{isLoading ? '—' : (reports.presentCount + reports.absentCount > 0 ? `${reports.overallRate}%` : '—')}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Cumulative rate</span>
+              <span className="stat-subtext">{reports.presentCount + reports.absentCount > 0 ? 'Cumulative rate' : 'No attendance recorded yet'}</span>
             </div>
           </div>
         </div>
@@ -218,9 +224,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Present Count</div>
-            <div className="stat-value">{isLoading ? '—' : reports.presentCount}</div>
+            <div className="stat-value">{isLoading ? '—' : (reports.presentCount + reports.absentCount > 0 ? reports.presentCount : '—')}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Recorded attendances</span>
+              <span className="stat-subtext">{reports.presentCount + reports.absentCount > 0 ? 'Recorded attendances' : 'No sessions held'}</span>
             </div>
           </div>
         </div>
@@ -231,9 +237,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Absent Count</div>
-            <div className="stat-value">{isLoading ? '—' : reports.absentCount}</div>
+            <div className="stat-value">{isLoading ? '—' : (reports.presentCount + reports.absentCount > 0 ? reports.absentCount : '—')}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Recorded absences</span>
+              <span className="stat-subtext">{reports.presentCount + reports.absentCount > 0 ? 'Recorded absences' : 'No sessions held'}</span>
             </div>
           </div>
         </div>
@@ -244,9 +250,9 @@ export const AttendanceReportsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Avg per Student</div>
-            <div className="stat-value">{isLoading ? '—' : `${reports.avgRate}%`}</div>
+            <div className="stat-value">{isLoading ? '—' : (reports.presentCount + reports.absentCount > 0 ? `${reports.avgRate}%` : '—')}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Across {filteredStudents.length} students</span>
+              <span className="stat-subtext">{reports.presentCount + reports.absentCount > 0 ? `Across ${filteredStudents.length} students` : 'No records yet'}</span>
             </div>
           </div>
         </div>

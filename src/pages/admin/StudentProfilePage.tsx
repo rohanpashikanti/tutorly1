@@ -32,7 +32,21 @@ export const StudentProfilePage: React.FC = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [examTypeFilter, setExamTypeFilter] = useState<'School Exams' | 'Tuition Tests'>('School Exams');
   const [promoteYear, setPromoteYear] = useState('Academic Year 2027 - 2028');
-  const [promoteClass, setPromoteClass] = useState('Class 11');
+  const [promoteClass, setPromoteClass] = useState('');
+  const [classList, setClassList] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (!activeInstitutionId) return;
+    api.academics.getOverview(activeInstitutionId)
+      .then((res) => {
+        const cls = res?.classes || [];
+        setClassList(cls);
+        if (cls.length > 0 && !promoteClass) {
+          setPromoteClass(cls[0].name);
+        }
+      })
+      .catch(() => {});
+  }, [activeInstitutionId]);
 
   const [student, setStudent] = useState<Student | null>(() => {
     const list = getStoredStudents();
@@ -67,8 +81,8 @@ export const StudentProfilePage: React.FC = () => {
 
   const [editFormData, setEditFormData] = useState({
     name: student?.name || '',
-    class: student?.class || 'Class 10',
-    batch: student?.batch || 'Batch A',
+    class: student?.class || '',
+    batch: student?.batch || '',
     fatherName: student?.parent?.fatherName || '',
     phone: student?.parent?.phone || '',
     email: student?.parent?.email || '',
@@ -691,9 +705,13 @@ export const StudentProfilePage: React.FC = () => {
                       value={promoteClass}
                       onChange={(e) => setPromoteClass(e.target.value)}
                     >
-                      <option>Class 11</option>
-                      <option>Class 10</option>
-                      <option>Class 9</option>
+                      {classList.length === 0 ? (
+                        <option value="">No classes configured</option>
+                      ) : (
+                        classList.map((c) => (
+                          <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>

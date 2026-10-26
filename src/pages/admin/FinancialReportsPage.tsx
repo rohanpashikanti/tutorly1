@@ -29,23 +29,39 @@ export const FinancialReportsPage: React.FC = () => {
   const [selectedMethod, setSelectedMethod] = useState<string>('All Methods');
 
   const [metrics, setMetrics] = useState({
-    totalBilled: 240000,
-    totalCollected: 198500,
-    totalOutstanding: 41500,
-    collectionRate: 82.7,
+    totalBilled: 0,
+    totalCollected: 0,
+    totalOutstanding: 0,
+    collectionRate: 0,
+    monthlyCollections: [] as { month: string; amount: number }[],
   });
+  const [payments, setPayments] = useState<any[]>([]);
+  const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
+  const [feePlansList, setFeePlansList] = useState<{ id: string; name: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    api.fees.getReports(activeInstitutionId).then((res) => {
-      if (res && res.totalBilled !== undefined) {
+    if (!activeInstitutionId) return;
+    setIsLoading(true);
+    Promise.all([
+      api.fees.getReports(activeInstitutionId).catch(() => null),
+      api.fees.getPayments(activeInstitutionId).catch(() => ({ payments: [] })),
+      api.fees.getPlans(activeInstitutionId).catch(() => ({ plans: [] })),
+      api.academics.getOverview(activeInstitutionId).catch(() => null),
+    ]).then(([repRes, payRes, planRes, overRes]) => {
+      if (repRes && repRes.totalBilled !== undefined) {
         setMetrics({
-          totalBilled: res.totalBilled,
-          totalCollected: res.totalCollected,
-          totalOutstanding: res.totalOutstanding,
-          collectionRate: res.collectionRate,
+          totalBilled: repRes.totalBilled,
+          totalCollected: repRes.totalCollected,
+          totalOutstanding: repRes.totalOutstanding,
+          collectionRate: repRes.collectionRate,
+          monthlyCollections: repRes.monthlyCollections || [],
         });
       }
-    }).catch(() => {});
+      setPayments(payRes?.payments || []);
+      setFeePlansList(planRes?.plans || []);
+      setClassesList(overRes?.classes || []);
+    }).finally(() => setIsLoading(false));
   }, [activeInstitutionId]);
 
   const handleExportCSV = (reportName?: string) => {
@@ -56,11 +72,10 @@ export const FinancialReportsPage: React.FC = () => {
       { Metric: 'Class Scope', Value: selectedClass },
       { Metric: 'Fee Plan', Value: selectedFeePlan },
       { Metric: 'Payment Method', Value: selectedMethod },
-      { Metric: 'Total Expected Revenue', Value: '₹2,40,000' },
-      { Metric: 'Total Realized Collections', Value: '₹1,98,500' },
-      { Metric: 'Collection Rate', Value: '82.7%' },
-      { Metric: 'Total Pending Dues', Value: '₹41,500' },
-      { Metric: 'Total Overdue Dues', Value: '₹26,000' },
+      { Metric: 'Total Expected Revenue', Value: `₹${metrics.totalBilled.toLocaleString('en-IN')}` },
+      { Metric: 'Total Realized Collections', Value: `₹${metrics.totalCollected.toLocaleString('en-IN')}` },
+      { Metric: 'Collection Rate', Value: `${metrics.collectionRate}%` },
+      { Metric: 'Total Pending Dues', Value: `₹${metrics.totalOutstanding.toLocaleString('en-IN')}` },
     ];
     downloadCSV(`${reportTitle.replace(/\s+/g, '_')}.csv`, data);
     showToast(`Exported ${reportTitle} to CSV`, 'success');
@@ -147,9 +162,9 @@ export const FinancialReportsPage: React.FC = () => {
               onChange={(e) => setSelectedClass(e.target.value)}
             >
               <option value="All Classes">All Classes</option>
-              <option value="Class 10">Class 10</option>
-              <option value="Class 9">Class 9</option>
-              <option value="Class 8">Class 8</option>
+              {classesList.map((c) => (
+                <option key={c.id || c.name} value={c.name}>{c.name}</option>
+              ))}
             </select>
           </div>
 
@@ -163,9 +178,9 @@ export const FinancialReportsPage: React.FC = () => {
               onChange={(e) => setSelectedFeePlan(e.target.value)}
             >
               <option value="All Fee Plans">All Fee Plans</option>
-              <option value="Tuition Monthly">Tuition Monthly</option>
-              <option value="Science Batch">Science Batch</option>
-              <option value="Maths Advanced">Maths Advanced</option>
+              {feePlansList.map((p) => (
+                <option key={p.id || p.name} value={p.name}>{p.name}</option>
+              ))}
             </select>
           </div>
 
@@ -272,46 +287,32 @@ export const FinancialReportsPage: React.FC = () => {
               </div>
 
               {/* Grouped Bar Chart Simulation */}
-              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', height: '220px', padding: '10px 0', borderBottom: '1px solid #E2E8F0' }}>
-                {[
-                  { month: 'Apr', exp: 120, col: 110 },
-                  { month: 'May', exp: 130, col: 125 },
-                  { month: 'Jun', exp: 140, col: 135 },
-                  { month: 'Jul', exp: 160, col: 150 },
-                  { month: 'Aug', exp: 155, col: 145 },
-                  { month: 'Sep', exp: 170, col: 160 },
-                  { month: 'Oct', exp: 190, col: 175 },
-                  { month: 'Nov', exp: 180, col: 160 },
-                  { month: 'Dec', exp: 175, col: 150 },
-                  { month: 'Jan', exp: 185, col: 160 },
-                  { month: 'Feb', exp: 190, col: 170 },
-                  { month: 'Mar', exp: 200, col: 185 }
-                ].map((item, idx) => (
-                  <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '170px' }}>
-                      <div
-                        style={{
-                          width: '10px',
-                          height: `${item.exp * 0.8}px`,
-                          backgroundColor: '#E2E8F0',
-                          borderRadius: '3px 3px 0 0'
-                        }}
-                        title={`Expected: ₹${item.exp * 200}`}
-                      />
-                      <div
-                        style={{
-                          width: '10px',
-                          height: `${item.col * 0.8}px`,
-                          backgroundColor: '#6366F1',
-                          borderRadius: '3px 3px 0 0'
-                        }}
-                        title={`Collected: ₹${item.col * 200}`}
-                      />
+              {metrics.monthlyCollections.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '60px 20px', color: '#64748B' }}>
+                  <TrendingUp size={36} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
+                  <div style={{ fontWeight: 600, fontSize: '14px', color: '#334155' }}>No revenue trend data</div>
+                  <div style={{ fontSize: '12.5px' }}>Monthly breakdown will be calculated as payments are recorded.</div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', height: '220px', padding: '10px 0', borderBottom: '1px solid #E2E8F0' }}>
+                  {metrics.monthlyCollections.map((item, idx) => (
+                    <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '170px' }}>
+                        <div
+                          style={{
+                            width: '14px',
+                            height: `${Math.min(160, Math.max(10, item.amount / 1000))}px`,
+                            backgroundColor: '#6366F1',
+                            borderRadius: '3px 3px 0 0'
+                          }}
+                          title={`Collected: ₹${item.amount.toLocaleString('en-IN')}`}
+                        />
+                      </div>
+                      <span style={{ fontSize: '11px', color: '#64748B' }}>{item.month}</span>
                     </div>
-                    <span style={{ fontSize: '11px', color: '#64748B' }}>{item.month}</span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Fee Collection Breakdown Donut */}
@@ -325,14 +326,12 @@ export const FinancialReportsPage: React.FC = () => {
                 size={180}
                 strokeWidth={22}
                 centerLabel="Total Collected"
-                centerValue="₹1,98,500"
-                segments={[
-                  { label: 'Tuition Fee (68%)', value: 68, color: '#6366F1' },
-                  { label: 'Test Fee (12%)', value: 12, color: '#38BDF8' },
-                  { label: 'Special Batch (8%)', value: 8, color: '#F43F5E' },
-                  { label: 'Study Material (6%)', value: 6, color: '#FB923C' },
-                  { label: 'Other Fees (6%)', value: 6, color: '#A855F7' }
-                ]}
+                centerValue={`₹${metrics.totalCollected.toLocaleString('en-IN')}`}
+                segments={
+                  metrics.totalCollected > 0
+                    ? [{ label: 'Tuition Fees', value: metrics.totalCollected, color: '#6366F1' }]
+                    : [{ label: 'No collections', value: 1, color: '#E2E8F0' }]
+                }
               />
             </div>
           </div>
@@ -363,35 +362,40 @@ export const FinancialReportsPage: React.FC = () => {
                       <th>Date</th>
                       <th>Student Name</th>
                       <th>Class</th>
-                      <th>Fee Plan</th>
+                      <th>Receipt No</th>
                       <th>Amount</th>
                       <th>Method</th>
                       <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {[
-                      { id: 1, date: '28 Oct 2026', name: 'Aditya Sharma', class: 'Class 10 - A', plan: 'Tuition Monthly', amount: 3000, method: 'UPI' },
-                      { id: 2, date: '27 Oct 2026', name: 'Kavya Sri', class: 'Class 9 - A', plan: 'Tuition Monthly', amount: 2500, method: 'Card' },
-                      { id: 3, date: '25 Oct 2026', name: 'Charan Kumar', class: 'Class 8 - B', plan: 'Science Batch', amount: 1500, method: 'Cash' },
-                      { id: 4, date: '22 Oct 2026', name: 'Divya Nair', class: 'Class 10 - A', plan: 'Maths Advanced', amount: 1500, method: 'UPI' },
-                      { id: 5, date: '20 Oct 2026', name: 'Harshith Reddy', class: 'Class 9 - A', plan: 'Tuition Monthly', amount: 2500, method: 'Card' }
-                    ].map((row) => (
-                      <tr key={row.id}>
-                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{row.id}</td>
-                        <td style={{ fontSize: '12.5px', whiteSpace: 'nowrap' }}>{row.date}</td>
-                        <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.name}</td>
-                        <td><span className="badge badge-gray">{row.class}</span></td>
-                        <td style={{ fontSize: '12.5px', color: '#475569' }}>{row.plan}</td>
-                        <td style={{ fontWeight: 700 }}>₹{row.amount.toLocaleString()}</td>
-                        <td><span className="badge badge-purple">{row.method}</span></td>
-                        <td><span className="badge badge-success">Paid</span></td>
+                    {payments.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} style={{ textAlign: 'center', padding: '36px 20px', color: '#64748B' }}>
+                          <CreditCard size={28} style={{ margin: '0 auto 8px', opacity: 0.3 }} />
+                          <div style={{ fontWeight: 600, fontSize: '13.5px', color: '#334155' }}>No transactions recorded yet</div>
+                          <div style={{ fontSize: '12px' }}>Payments recorded for this institution will appear here.</div>
+                        </td>
                       </tr>
-                    ))}
+                    ) : (
+                      payments.slice(0, 5).map((row, idx) => (
+                        <tr key={row.id || idx}>
+                          <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                          <td style={{ fontSize: '12.5px', whiteSpace: 'nowrap' }}>{row.date}</td>
+                          <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.studentName}</td>
+                          <td><span className="badge badge-gray">{row.class}</span></td>
+                          <td style={{ fontSize: '12.5px', color: '#475569' }}>{row.receiptNo}</td>
+                          <td style={{ fontWeight: 700 }}>₹{row.amount.toLocaleString()}</td>
+                          <td><span className="badge badge-purple">{row.method}</span></td>
+                          <td><span className="badge badge-success">{row.status}</span></td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
             </div>
+
 
             {/* Quick Reports & Progress Bars */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -512,23 +516,27 @@ export const FinancialReportsPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { cat: 'Class 10 - A (Morning Batch)', sub: '32 Students', exp: 96000, col: 84000, pen: 12000, rate: '87.5%' },
-                  { cat: 'Class 9 - A (Morning Batch)', sub: '28 Students', exp: 70000, col: 58000, pen: 12000, rate: '82.8%' },
-                  { cat: 'Class 8 - B (Evening Batch)', sub: '26 Students', exp: 65000, col: 52000, pen: 13000, rate: '80.0%' },
-                  { cat: 'Science Special Batch', sub: '20 Students', exp: 30000, col: 26000, pen: 4000, rate: '86.6%' },
-                  { cat: 'Maths Advanced Batch', sub: '18 Students', exp: 27000, col: 24000, pen: 3000, rate: '88.8%' }
-                ].map((row, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.cat}</td>
-                    <td style={{ color: '#64748B' }}>{row.sub}</td>
-                    <td>₹{row.exp.toLocaleString()}</td>
-                    <td style={{ color: '#10B981', fontWeight: 600 }}>₹{row.col.toLocaleString()}</td>
-                    <td style={{ color: '#EF4444', fontWeight: 600 }}>₹{row.pen.toLocaleString()}</td>
-                    <td><span className="badge badge-purple">{row.rate}</span></td>
-                    <td><span className="badge badge-success">Active</span></td>
+                {payments.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '36px 20px', color: '#64748B' }}>
+                      <FileText size={28} style={{ margin: '0 auto 8px', opacity: 0.3 }} />
+                      <div style={{ fontWeight: 600, fontSize: '13.5px', color: '#334155' }}>No report records found</div>
+                      <div style={{ fontSize: '12px' }}>Records for {activeTab} will appear here once student fees and payments are created.</div>
+                    </td>
                   </tr>
-                ))}
+                ) : (
+                  payments.map((row, i) => (
+                    <tr key={row.id || i}>
+                      <td style={{ fontWeight: 600, color: '#0F172A' }}>{row.studentName}</td>
+                      <td style={{ color: '#64748B' }}>{row.class}</td>
+                      <td>₹{row.amount.toLocaleString()}</td>
+                      <td style={{ color: '#10B981', fontWeight: 600 }}>₹{row.amount.toLocaleString()}</td>
+                      <td style={{ color: '#EF4444', fontWeight: 600 }}>₹0</td>
+                      <td><span className="badge badge-purple">100%</span></td>
+                      <td><span className="badge badge-success">{row.status}</span></td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

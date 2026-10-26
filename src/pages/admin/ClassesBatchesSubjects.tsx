@@ -16,7 +16,7 @@ import {
   Download
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { ClassItem, BatchItem, SubjectItem } from '../../types';
+import { ClassItem, BatchItem, SubjectItem, Teacher } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { api } from '../../api/client';
 
@@ -26,6 +26,7 @@ export const ClassesBatchesSubjects: React.FC = () => {
   const [classesList, setClassesList] = useState<ClassItem[]>([]);
   const [batchesList, setBatchesList] = useState<BatchItem[]>([]);
   const [subjectsList, setSubjectsList] = useState<SubjectItem[]>([]);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [selectedClass, setSelectedClass] = useState<ClassItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -40,13 +41,17 @@ export const ClassesBatchesSubjects: React.FC = () => {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const res = await api.academics.getOverview(activeInstitutionId);
-      const classes = res.classes || [];
-      const batches = res.batches || [];
-      const subjects = res.subjects || [];
+      const [res, teachersRes] = await Promise.all([
+        api.academics.getOverview(activeInstitutionId),
+        api.teachers.list(activeInstitutionId).catch(() => ({ teachers: [] })),
+      ]);
+      const classes = res?.classes || [];
+      const batches = res?.batches || [];
+      const subjects = res?.subjects || [];
       setClassesList(classes);
       setBatchesList(batches);
       setSubjectsList(subjects);
+      setTeachers(teachersRes?.teachers || []);
       setSelectedClass(classes.length > 0 ? (prev => prev ? classes.find(c => c.id === prev.id) || classes[0] : classes[0]) : null);
     } catch (err) {
       console.error('Error fetching academics from D1:', err);
@@ -61,15 +66,15 @@ export const ClassesBatchesSubjects: React.FC = () => {
   }, [loadAcademics]);
 
   const [newClassName, setNewClassName] = useState('');
-  const [newClassTeacher, setNewClassTeacher] = useState('Priya Varma');
+  const [newClassTeacher, setNewClassTeacher] = useState('');
 
   const [editClassName, setEditClassName] = useState('');
   const [editClassTeacher, setEditClassTeacher] = useState('');
 
   const [newBatchName, setNewBatchName] = useState('');
-  const [newBatchClass, setNewBatchClass] = useState('Class 10');
+  const [newBatchClass, setNewBatchClass] = useState('');
   const [newBatchTiming, setNewBatchTiming] = useState('04:30 PM - 06:30 PM');
-  const [newBatchTeacher, setNewBatchTeacher] = useState('Priya Varma');
+  const [newBatchTeacher, setNewBatchTeacher] = useState('');
 
   const [newSubjectName, setNewSubjectName] = useState('');
   const [newSubjectCode, setNewSubjectCode] = useState('');
@@ -609,10 +614,10 @@ export const ClassesBatchesSubjects: React.FC = () => {
                     onChange={(e) => setNewClassTeacher(e.target.value)}
                     style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   >
-                    <option>Priya Varma</option>
-                    <option>Ravi Teja</option>
-                    <option>Sneha Reddy</option>
-                    <option>Suresh Reddy</option>
+                    <option value="">-- Unassigned --</option>
+                    {teachers.map((t) => (
+                      <option key={t.id} value={t.name}>{t.name} ({t.subject || (t.subjects && t.subjects[0]) || 'Faculty'})</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -649,26 +654,31 @@ export const ClassesBatchesSubjects: React.FC = () => {
 
                 <div className="grid-2-col" style={{ gap: '14px' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Class</label>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Class *</label>
                     <select
+                      required
                       value={newBatchClass}
                       onChange={(e) => setNewBatchClass(e.target.value)}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option>Class 10</option>
-                      <option>Class 9</option>
-                      <option>Class 8</option>
-                      <option>Class 7</option>
+                      <option value="">Select Class</option>
+                      {classesList.map((c) => (
+                        <option key={c.id} value={c.name}>{c.name}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>Teacher</label>
-                    <input
-                      type="text"
+                    <select
                       value={newBatchTeacher}
                       onChange={(e) => setNewBatchTeacher(e.target.value)}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
-                    />
+                    >
+                      <option value="">-- Unassigned --</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.name}>{t.name}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 

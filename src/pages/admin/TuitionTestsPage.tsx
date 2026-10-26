@@ -15,7 +15,7 @@ import {
   Search
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { TuitionTest, Student } from '../../types';
+import { TuitionTest, Student, ClassItem, BatchItem, SubjectItem } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
 import { api } from '../../api/client';
@@ -41,11 +41,16 @@ export const TuitionTestsPage: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
   const [activeTab, setActiveTab] = useState<'Enter Marks' | 'View Results' | 'Tests Schedule'>('Enter Marks');
 
+  // Dynamic classes, batches, subjects
+  const [classesList, setClassesList] = useState<ClassItem[]>([]);
+  const [batchesList, setBatchesList] = useState<BatchItem[]>([]);
+  const [subjectsList, setSubjectsList] = useState<SubjectItem[]>([]);
+
   // Stored tests & marks
   const [tests, setTests] = useState<TuitionTest[]>(() => getStoredTuitionTests());
   const [selectedTestId, setSelectedTestId] = useState<string>(() => tests[0]?.id || '');
-  const [selectedBatch, setSelectedBatch] = useState('Batch A (Class 10)');
-  const [selectedSubject, setSelectedSubject] = useState('Physics');
+  const [selectedBatch, setSelectedBatch] = useState('');
+  const [selectedSubject, setSelectedSubject] = useState('');
   const [maxMarks, setMaxMarks] = useState<number>(50);
   const [testDate, setTestDate] = useState('2026-10-28');
   const [searchFilter, setSearchFilter] = useState('');
@@ -61,13 +66,35 @@ export const TuitionTestsPage: React.FC = () => {
   const [newTestData, setNewTestData] = useState({
     name: '',
     type: 'Unit Test' as TuitionTest['type'],
-    class: 'Class 10',
-    batch: 'Batch A',
-    subject: 'Physics',
+    class: '',
+    batch: '',
+    subject: '',
     dateTime: '2026-10-28 10:00 AM',
     durationMinutes: 60,
     maxMarks: 50
   });
+
+  useEffect(() => {
+    if (!activeInstitutionId) return;
+    api.academics.getOverview(activeInstitutionId)
+      .then((res) => {
+        const cls = res?.classes || [];
+        const bth = res?.batches || [];
+        const sub = res?.subjects || [];
+        setClassesList(cls);
+        setBatchesList(bth);
+        setSubjectsList(sub);
+        setSelectedBatch(prev => prev || bth[0]?.name || '');
+        setSelectedSubject(prev => prev || sub[0]?.name || '');
+        setNewTestData(d => ({
+          ...d,
+          class: cls[0]?.name || '',
+          batch: bth[0]?.name || '',
+          subject: sub[0]?.name || '',
+        }));
+      })
+      .catch(() => {});
+  }, [activeInstitutionId]);
 
   // Load tests from API
   const refreshTests = async () => {
@@ -387,9 +414,13 @@ export const TuitionTestsPage: React.FC = () => {
               }}
               style={{ minWidth: '180px' }}
             >
-              {tests.map(t => (
-                <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
-              ))}
+              {tests.length === 0 ? (
+                <option value="">No tests created</option>
+              ) : (
+                tests.map(t => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.type})</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -402,10 +433,13 @@ export const TuitionTestsPage: React.FC = () => {
               value={selectedBatch}
               onChange={(e) => setSelectedBatch(e.target.value)}
             >
-              <option value="Batch A (Class 10)">Batch A (Class 10)</option>
-              <option value="Batch B (Class 10)">Batch B (Class 10)</option>
-              <option value="Batch A (Class 9)">Batch A (Class 9)</option>
-              <option value="Batch B (Class 8)">Batch B (Class 8)</option>
+              {batchesList.length === 0 ? (
+                <option value="">No batches configured</option>
+              ) : (
+                batchesList.map(b => (
+                  <option key={b.id} value={b.name}>{b.name} ({b.className})</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -418,11 +452,13 @@ export const TuitionTestsPage: React.FC = () => {
               value={selectedSubject}
               onChange={(e) => setSelectedSubject(e.target.value)}
             >
-              <option value="Physics">Physics</option>
-              <option value="Mathematics">Mathematics</option>
-              <option value="Chemistry">Chemistry</option>
-              <option value="Biology">Biology</option>
-              <option value="English">English</option>
+              {subjectsList.length === 0 ? (
+                <option value="">No subjects configured</option>
+              ) : (
+                subjectsList.map(s => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))
+              )}
             </select>
           </div>
 
@@ -474,9 +510,9 @@ export const TuitionTestsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Batch Average</div>
-            <div className="stat-value">{avgPct}%</div>
+            <div className="stat-value">{validMarks.length > 0 ? `${avgPct}%` : '—'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">Avg: {avgMarks} / {maxMarks}</span>
+              <span className="stat-subtext">{validMarks.length > 0 ? `Avg: ${avgMarks} / ${maxMarks}` : 'No results recorded'}</span>
             </div>
           </div>
         </div>
@@ -487,9 +523,9 @@ export const TuitionTestsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Highest Score</div>
-            <div className="stat-value">{highestMark} <span style={{ fontSize: '13px', color: '#64748B' }}>/ {maxMarks}</span></div>
+            <div className="stat-value">{validMarks.length > 0 ? `${highestMark} / ${maxMarks}` : '—'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{Math.round((highestMark / maxMarks) * 100)}% Top Scorer</span>
+              <span className="stat-subtext">{validMarks.length > 0 ? `${Math.round((highestMark / maxMarks) * 100)}% Top Scorer` : 'No marks recorded'}</span>
             </div>
           </div>
         </div>
@@ -500,9 +536,9 @@ export const TuitionTestsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Pass Percentage</div>
-            <div className="stat-value">{passRate}%</div>
+            <div className="stat-value">{validMarks.length > 0 ? `${passRate}%` : '—'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{passedCount} of {studentMarks.length} students</span>
+              <span className="stat-subtext">{validMarks.length > 0 ? `${passedCount} of ${studentMarks.length} students` : 'No results recorded'}</span>
             </div>
           </div>
         </div>
@@ -513,9 +549,9 @@ export const TuitionTestsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Test Category</div>
-            <div className="stat-value" style={{ fontSize: '16px' }}>{currentTest?.type || 'Unit Test'}</div>
+            <div className="stat-value" style={{ fontSize: '16px' }}>{currentTest ? currentTest.type : 'No test scheduled'}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{currentTest?.durationMinutes || 60} mins duration</span>
+              <span className="stat-subtext">{currentTest ? `${currentTest.durationMinutes || 60} mins duration` : '—'}</span>
             </div>
           </div>
         </div>
@@ -1032,11 +1068,13 @@ export const TuitionTestsPage: React.FC = () => {
                       onChange={(e) => setNewTestData({ ...newTestData, subject: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option value="Physics">Physics</option>
-                      <option value="Mathematics">Mathematics</option>
-                      <option value="Chemistry">Chemistry</option>
-                      <option value="Biology">Biology</option>
-                      <option value="English">English</option>
+                      {subjectsList.length === 0 ? (
+                        <option value="">No subjects configured</option>
+                      ) : (
+                        subjectsList.map((s) => (
+                          <option key={s.id || s.name} value={s.name}>{s.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>
@@ -1051,9 +1089,13 @@ export const TuitionTestsPage: React.FC = () => {
                       onChange={(e) => setNewTestData({ ...newTestData, class: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option value="Class 10">Class 10</option>
-                      <option value="Class 9">Class 9</option>
-                      <option value="Class 8">Class 8</option>
+                      {classesList.length === 0 ? (
+                        <option value="">No classes configured</option>
+                      ) : (
+                        classesList.map((c) => (
+                          <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
 
@@ -1066,9 +1108,13 @@ export const TuitionTestsPage: React.FC = () => {
                       onChange={(e) => setNewTestData({ ...newTestData, batch: e.target.value })}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option value="Batch A">Batch A</option>
-                      <option value="Batch B">Batch B</option>
-                      <option value="Batch C">Batch C</option>
+                      {batchesList.length === 0 ? (
+                        <option value="">No batches configured</option>
+                      ) : (
+                        batchesList.map((b) => (
+                          <option key={b.id || b.name} value={b.name}>{b.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>

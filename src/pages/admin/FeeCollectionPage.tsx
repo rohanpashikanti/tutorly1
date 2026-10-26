@@ -32,13 +32,14 @@ export const FeeCollectionPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState('All Classes');
   const [selectedStatus, setSelectedStatus] = useState('All Payments');
+  const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
   const [showCollectModal, setShowCollectModal] = useState(false);
 
   // Collect Fee form state
   const [collectForm, setCollectForm] = useState({
     studentId: '',
     feePlan: 'Tuition Monthly Fee',
-    amount: 3000,
+    amount: 0,
     paymentMethod: 'UPI' as 'UPI' | 'Cash' | 'Card' | 'Bank Transfer',
     transactionId: '',
     paymentDate: new Date().toISOString().split('T')[0],
@@ -50,13 +51,15 @@ export const FeeCollectionPage: React.FC = () => {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [feeRes, stuRes] = await Promise.all([
+      const [feeRes, stuRes, overRes] = await Promise.all([
         api.fees.getRecords(activeInstitutionId),
-        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 }))
+        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
+        api.academics.getOverview(activeInstitutionId).catch(() => null)
       ]);
       const records = feeRes.records || [];
       setFeeRecords(records);
       saveStoredStudentFees(records);
+      setClassesList(overRes?.classes || []);
 
       if (stuRes && stuRes.students) {
         setStudents(stuRes.students);
@@ -208,9 +211,9 @@ export const FeeCollectionPage: React.FC = () => {
           <div>
             <select className="select-field" value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
               <option>All Classes</option>
-              <option>Class 10</option>
-              <option>Class 9</option>
-              <option>Class 8</option>
+              {classesList.map((c) => (
+                <option key={c.id || c.name} value={c.name}>{c.name}</option>
+              ))}
             </select>
           </div>
 

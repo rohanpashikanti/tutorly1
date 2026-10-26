@@ -73,27 +73,47 @@ export const StudentDirectory: React.FC = () => {
     void loadStudents();
   }, [loadStudents]);
 
+  const [availableClasses, setAvailableClasses] = useState<{ id: string; name: string }[]>([]);
+  const [availableBatches, setAvailableBatches] = useState<{ id: string; name: string }[]>([]);
+
+  React.useEffect(() => {
+    if (!activeInstitutionId) return;
+    api.academics.getOverview(activeInstitutionId)
+      .then((res) => {
+        const cls = res?.classes || [];
+        const bth = res?.batches || [];
+        setAvailableClasses(cls);
+        setAvailableBatches(bth);
+        setFormData(prev => ({
+          ...prev,
+          class: prev.class || cls[0]?.name || '',
+          batch: prev.batch || bth[0]?.name || ''
+        }));
+      })
+      .catch(() => {});
+  }, [activeInstitutionId]);
+
   // New student form state including individual fee assignment
   const [formData, setFormData] = useState({
     name: '',
-    class: 'Class 10',
-    batch: 'Batch A',
+    class: '',
+    batch: '',
     gender: 'Male' as const,
     dob: '2010-05-15',
     fatherName: '',
     phone: '',
     email: '',
-    tuitionFeeAmount: 36000,
+    tuitionFeeAmount: 0,
     billingFrequency: 'Monthly',
-    initialPayment: 3000,
-    feeDueDate: '2026-11-05'
+    initialPayment: 0,
+    feeDueDate: ''
   });
 
   // Edit student form state
   const [editFormData, setEditFormData] = useState({
     name: '',
-    class: 'Class 10',
-    batch: 'Batch A',
+    class: '',
+    batch: '',
     phone: '',
     email: '',
     fatherName: '',
@@ -279,11 +299,9 @@ export const StudentDirectory: React.FC = () => {
               onChange={(e) => setSelectedClass(e.target.value)}
             >
               <option>All Classes</option>
-              <option>Class 10</option>
-              <option>Class 9</option>
-              <option>Class 8</option>
-              <option>Class 7</option>
-              <option>Class 6</option>
+              {availableClasses.map((c) => (
+                <option key={c.id || c.name} value={c.name}>{c.name}</option>
+              ))}
             </select>
 
             <select
@@ -292,9 +310,9 @@ export const StudentDirectory: React.FC = () => {
               onChange={(e) => setSelectedBatch(e.target.value)}
             >
               <option>All Batches</option>
-              <option>Batch A</option>
-              <option>Batch B</option>
-              <option>Batch C</option>
+              {availableBatches.map((b) => (
+                <option key={b.id || b.name} value={b.name}>{b.name}</option>
+              ))}
             </select>
 
             <select
@@ -625,12 +643,15 @@ export const StudentDirectory: React.FC = () => {
                       value={formData.class}
                       onChange={(e) => setFormData({ ...formData, class: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                      required
                     >
-                      <option>Class 10</option>
-                      <option>Class 9</option>
-                      <option>Class 8</option>
-                      <option>Class 7</option>
-                      <option>Class 6</option>
+                      {availableClasses.length === 0 ? (
+                        <option value="">No classes configured</option>
+                      ) : (
+                        availableClasses.map((c) => (
+                          <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                   <div>
@@ -640,9 +661,13 @@ export const StudentDirectory: React.FC = () => {
                       onChange={(e) => setFormData({ ...formData, batch: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option>Batch A</option>
-                      <option>Batch B</option>
-                      <option>Batch C</option>
+                      {availableBatches.length === 0 ? (
+                        <option value="">No batches configured</option>
+                      ) : (
+                        availableBatches.map((b) => (
+                          <option key={b.id || b.name} value={b.name}>{b.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>
@@ -779,11 +804,13 @@ export const StudentDirectory: React.FC = () => {
                       onChange={(e) => setEditFormData({ ...editFormData, class: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option>Class 10</option>
-                      <option>Class 9</option>
-                      <option>Class 8</option>
-                      <option>Class 7</option>
-                      <option>Class 6</option>
+                      {availableClasses.length === 0 ? (
+                        <option value="">No classes configured</option>
+                      ) : (
+                        availableClasses.map((c) => (
+                          <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>
@@ -796,9 +823,13 @@ export const StudentDirectory: React.FC = () => {
                       onChange={(e) => setEditFormData({ ...editFormData, batch: e.target.value })}
                       style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
-                      <option>Batch A</option>
-                      <option>Batch B</option>
-                      <option>Batch C</option>
+                      {availableBatches.length === 0 ? (
+                        <option value="">No batches configured</option>
+                      ) : (
+                        availableBatches.map((b) => (
+                          <option key={b.id || b.name} value={b.name}>{b.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                   <div>

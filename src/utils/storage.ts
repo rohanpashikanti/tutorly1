@@ -4,7 +4,6 @@
  * initialized with default mock data if not yet saved.
  */
 
-import { INSTITUTION_INFO } from '../data/mockData';
 import {
   CalendarEvent,
   Student,
@@ -274,11 +273,26 @@ export interface InstitutionSettingsConfig {
 }
 
 export const DEFAULT_INSTITUTION_CONFIG: InstitutionSettingsConfig = {
-  ...INSTITUTION_INFO,
+  name: 'My Tuition Center',
+  shortName: 'Tuition Center',
+  tagline: 'Quality Education & Personalized Guidance',
+  description: 'Tuition and coaching center management powered by Tutorly.',
+  phone: '',
+  email: '',
+  website: '',
+  address: '',
+  academicYear: '2026 - 2027',
+  startDate: '2026-04-01',
+  endDate: '2027-03-31',
+  defaultStartTime: '09:00 AM',
+  defaultEndTime: '08:00 PM',
+  workingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  currency: 'INR (₹)',
+  timezone: '(GMT+05:30) India Standard Time',
   passingPercentage: 40,
   attendanceThreshold: 75,
   termCount: 2,
-  feeReceiptPrefix: 'REC-2026-',
+  feeReceiptPrefix: 'REC-',
   defaultDueDays: 10,
   allowPartialPayments: true,
   attendanceAlerts: true,

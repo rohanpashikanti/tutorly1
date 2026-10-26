@@ -12,10 +12,12 @@ import {
   Trash2,
   Edit2,
   List,
-  Clock
+  Clock,
+  CheckCircle,
+  Archive,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { CalendarEvent } from '../../types';
+import { CalendarEvent, AcademicYear } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { api } from '../../api/client';
 import { getStoredCalendarEvents, saveStoredCalendarEvents } from '../../utils/storage';
@@ -34,6 +36,22 @@ export const AcademicCalendarPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [viewEventDetail, setViewEventDetail] = useState<CalendarEvent | null>(null);
 
+  // Dynamic classes for selector
+  const [availableClasses, setAvailableClasses] = useState<string[]>([]);
+
+  // Academic Years state
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
+  const [isLoadingAcademicYears, setIsLoadingAcademicYears] = useState(false);
+  const [showYearModal, setShowYearModal] = useState(false);
+  const [editingYear, setEditingYear] = useState<AcademicYear | null>(null);
+  const [yearFormError, setYearFormError] = useState<string | null>(null);
+  const [yearForm, setYearForm] = useState({
+    name: '',
+    startsOn: '',
+    endsOn: '',
+    status: 'planned' as AcademicYear['status'],
+  });
+
   const months = [
     { name: 'September 2026', year: 2026, month: 8 },
     { name: 'October 2026', year: 2026, month: 9 },
@@ -48,25 +66,48 @@ export const AcademicCalendarPage: React.FC = () => {
     date: '2026-10-25',
     endDate: '',
     time: '10:00 AM',
-    applicableClass: 'Class 10',
+    applicableClass: 'All Classes',
     description: '',
   });
 
-  const refreshEvents = async () => {
+  const refreshEvents = React.useCallback(async () => {
+    if (!activeInstitutionId) return;
     try {
       const res = await api.calendar.list(activeInstitutionId);
-      if (res && res.events && res.events.length > 0) {
-        setEvents(res.events);
-        saveStoredCalendarEvents(res.events);
-      }
+      const evts = res?.events || [];
+      setEvents(evts);
+      saveStoredCalendarEvents(evts);
     } catch {
       // Keep cached state
     }
-  };
+  }, [activeInstitutionId]);
+
+  const loadAcademicYears = React.useCallback(async () => {
+    if (!activeInstitutionId) return;
+    setIsLoadingAcademicYears(true);
+    try {
+      const res = await api.academics.listAcademicYears(activeInstitutionId);
+      setAcademicYears(res.academicYears || []);
+    } catch (err: any) {
+      console.error('Failed to load academic years:', err);
+    } finally {
+      setIsLoadingAcademicYears(false);
+    }
+  }, [activeInstitutionId]);
 
   useEffect(() => {
-    refreshEvents();
-  }, [activeInstitutionId]);
+    void refreshEvents();
+    void loadAcademicYears();
+    if (activeInstitutionId) {
+      api.academics.getOverview(activeInstitutionId)
+        .then((res) => {
+          if (res?.classes) {
+            setAvailableClasses(res.classes.map((c) => c.name));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [activeInstitutionId, refreshEvents, loadAcademicYears]);
 
   // Sync to storage on state change
   const updateEventsAndPersist = (newEvents: CalendarEvent[]) => {
@@ -75,6 +116,10 @@ export const AcademicCalendarPage: React.FC = () => {
   };
 
   const handleExportEventsCSV = () => {
+    if (events.length === 0) {
+      showToast('No calendar events to export', 'info');
+      return;
+    }
     const data = events.map((ev) => ({
       Title: ev.title,
       Type: ev.type,
@@ -88,6 +133,22 @@ export const AcademicCalendarPage: React.FC = () => {
     showToast(`Exported ${data.length} calendar events to CSV`, 'success');
   };
 
+  const handleExportAcademicYearsCSV = () => {
+    if (academicYears.length === 0) {
+      showToast('No academic years to export', 'info');
+      return;
+    }
+    const data = academicYears.map((ay) => ({
+      Session: ay.name,
+      Start: ay.starts_on,
+      End: ay.ends_on,
+      Status: ay.status,
+      EnrolledStudents: ay.enrolled_students || 0,
+    }));
+    downloadCSV('Academic_Years.csv', data);
+    showToast(`Exported ${data.length} academic sessions to CSV`, 'success');
+  };
+
   const handlePrevMonth = () => {
     setCurrentMonthIdx((prev) => Math.max(0, prev - 1));
   };
@@ -96,19 +157,105 @@ export const AcademicCalendarPage: React.FC = () => {
     setCurrentMonthIdx((prev) => Math.min(months.length - 1, prev + 1));
   };
 
-  const openNewEventModal = (initialDate?: string) => {
+  const openNewEventModal = (initialDate?: string, defaultType?: CalendarEvent['type']) => {
     setEditingEventId(null);
     setFormError(null);
     setFormState({
       title: '',
-      type: 'Tuition Test',
-      date: initialDate || '2026-10-25',
+      type: defaultType || 'Tuition Test',
+      date: initialDate || new Date().toISOString().slice(0, 10),
       endDate: '',
       time: '10:00 AM',
-      applicableClass: 'Class 10',
+      applicableClass: availableClasses[0] || 'All Classes',
       description: '',
     });
     setShowAddModal(true);
+  };
+
+  const openCreateYearModal = () => {
+    setEditingYear(null);
+    setYearFormError(null);
+    const curr = new Date().getFullYear();
+    setYearForm({
+      name: `Academic Year ${curr} - ${curr + 1}`,
+      startsOn: `${curr}-04-01`,
+      endsOn: `${curr + 1}-03-31`,
+      status: 'planned',
+    });
+    setShowYearModal(true);
+  };
+
+  const openEditYearModal = (year: AcademicYear) => {
+    setEditingYear(year);
+    setYearFormError(null);
+    setYearForm({
+      name: year.name,
+      startsOn: year.starts_on,
+      endsOn: year.ends_on,
+      status: year.status,
+    });
+    setShowYearModal(true);
+  };
+
+  const handleSaveYear = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setYearFormError(null);
+    if (!yearForm.name.trim()) {
+      setYearFormError('Academic Year name is required');
+      return;
+    }
+    if (!yearForm.startsOn || !yearForm.endsOn) {
+      setYearFormError('Start date and End date are required');
+      return;
+    }
+    if (yearForm.endsOn < yearForm.startsOn) {
+      setYearFormError('End date cannot precede start date');
+      return;
+    }
+
+    try {
+      if (editingYear) {
+        await api.academics.updateAcademicYear(activeInstitutionId, editingYear.id, {
+          name: yearForm.name.trim(),
+          startsOn: yearForm.startsOn,
+          endsOn: yearForm.endsOn,
+          status: yearForm.status,
+        });
+        showToast('Academic Year updated successfully', 'success');
+      } else {
+        await api.academics.createAcademicYear(activeInstitutionId, {
+          name: yearForm.name.trim(),
+          startsOn: yearForm.startsOn,
+          endsOn: yearForm.endsOn,
+          status: yearForm.status,
+        });
+        showToast('Academic Year created successfully', 'success');
+      }
+      setShowYearModal(false);
+      await loadAcademicYears();
+    } catch (err: any) {
+      setYearFormError(err?.message || 'Failed to save academic year');
+    }
+  };
+
+  const handleActivateYear = async (year: AcademicYear) => {
+    try {
+      await api.academics.activateAcademicYear(activeInstitutionId, year.id);
+      showToast(`"${year.name}" is now the active academic year`, 'success');
+      await loadAcademicYears();
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to activate academic year', 'error');
+    }
+  };
+
+  const handleArchiveYear = async (year: AcademicYear) => {
+    try {
+      await api.academics.archiveAcademicYear(activeInstitutionId, year.id);
+      showToast(`Archived "${year.name}"`, 'info');
+      await loadAcademicYears();
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to archive academic year', 'error');
+    }
   };
 
   const openEditEventModal = (ev: CalendarEvent) => {
@@ -883,63 +1030,112 @@ export const AcademicCalendarPage: React.FC = () => {
               <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Academic Years Configuration</h2>
               <p style={{ fontSize: '13px', color: '#64748B' }}>Manage historical, active, and upcoming academic sessions.</p>
             </div>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => downloadCSV('Academic_Years.csv', [
-                { Session: '2026 - 2027', Start: '01 Apr 2026', End: '31 Mar 2027', Terms: 2, WorkingDays: 220, Status: 'Active' },
-                { Session: '2025 - 2026', Start: '01 Apr 2025', End: '31 Mar 2026', Terms: 2, WorkingDays: 218, Status: 'Archived' },
-                { Session: '2027 - 2028', Start: '01 Apr 2027', End: '31 Mar 2028', Terms: 2, WorkingDays: 220, Status: 'Upcoming' },
-              ])}
-            >
-              <Download size={14} />
-              <span>Export Sessions (CSV)</span>
-            </button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportAcademicYearsCSV}
+              >
+                <Download size={14} />
+                <span>Export Sessions (CSV)</span>
+              </button>
+              {isAdmin && (
+                <button className="btn btn-primary btn-sm" onClick={openCreateYearModal}>
+                  <Plus size={14} />
+                  <span>Create Academic Year</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="table-container">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Academic Session</th>
-                  <th>Start Date</th>
-                  <th>End Date</th>
-                  <th>Total Terms</th>
-                  <th>Working Days</th>
-                  <th>Enrolled Students</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ fontWeight: 800, color: '#0F172A' }}>Academic Year 2026 - 2027</td>
-                  <td>01 Apr 2026</td>
-                  <td>31 Mar 2027</td>
-                  <td>2 Terms</td>
-                  <td>220 Days</td>
-                  <td><strong>248 Students</strong></td>
-                  <td><span className="badge badge-success">Active Session</span></td>
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700, color: '#475569' }}>Academic Year 2025 - 2026</td>
-                  <td>01 Apr 2025</td>
-                  <td>31 Mar 2026</td>
-                  <td>2 Terms</td>
-                  <td>218 Days</td>
-                  <td>212 Students</td>
-                  <td><span className="badge badge-neutral">Archived</span></td>
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700, color: '#475569' }}>Academic Year 2027 - 2028</td>
-                  <td>01 Apr 2027</td>
-                  <td>31 Mar 2028</td>
-                  <td>2 Terms</td>
-                  <td>220 Days</td>
-                  <td>0 Enrolled</td>
-                  <td><span className="badge badge-purple">Upcoming</span></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          {isLoadingAcademicYears ? (
+            <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>Loading academic years...</div>
+          ) : academicYears.length > 0 ? (
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Academic Session</th>
+                    <th>Start Date</th>
+                    <th>End Date</th>
+                    <th>Enrolled Students</th>
+                    <th>Status</th>
+                    {isAdmin && <th style={{ textAlign: 'right' }}>Actions</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {academicYears.map((ay) => {
+                    let badgeClass = 'badge-neutral';
+                    if (ay.status === 'active') badgeClass = 'badge-success';
+                    else if (ay.status === 'planned') badgeClass = 'badge-purple';
+                    else if (ay.status === 'completed') badgeClass = 'badge-info';
+
+                    return (
+                      <tr key={ay.id}>
+                        <td style={{ fontWeight: 800, color: '#0F172A' }}>{ay.name}</td>
+                        <td>{ay.starts_on}</td>
+                        <td>{ay.ends_on}</td>
+                        <td>{ay.enrolled_students || 0} Students</td>
+                        <td>
+                          <span className={`badge ${badgeClass}`} style={{ textTransform: 'capitalize' }}>
+                            {ay.status === 'active' ? 'Active Session' : ay.status}
+                          </span>
+                        </td>
+                        {isAdmin && (
+                          <td style={{ textAlign: 'right' }}>
+                            <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                              {ay.status !== 'active' && ay.status !== 'archived' && (
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }}
+                                  onClick={() => handleActivateYear(ay)}
+                                  title="Designate as Active Year"
+                                >
+                                  <CheckCircle size={12} color="#10B981" />
+                                  <span>Activate</span>
+                                </button>
+                              )}
+                              <button
+                                className="btn btn-secondary btn-icon"
+                                style={{ width: '28px', height: '28px', padding: 0 }}
+                                onClick={() => openEditYearModal(ay)}
+                                title="Edit Session"
+                              >
+                                <Edit2 size={13} color="#475569" />
+                              </button>
+                              {ay.status !== 'archived' && (
+                                <button
+                                  className="btn btn-secondary btn-icon"
+                                  style={{ width: '28px', height: '28px', padding: 0 }}
+                                  onClick={() => handleArchiveYear(ay)}
+                                  title="Archive Session"
+                                >
+                                  <Archive size={13} color="#64748B" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center' }}>
+              <CalendarIcon size={44} color="#CBD5E1" style={{ marginBottom: '14px' }} />
+              <div style={{ fontSize: '16px', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>No academic years configured yet</div>
+              <p style={{ fontSize: '13px', color: '#64748B', maxWidth: '420px', marginBottom: '18px' }}>
+                Create your institution's academic session to manage term dates, curriculum scheduling, and student enrollments.
+              </p>
+              {isAdmin && (
+                <button className="btn btn-primary" onClick={openCreateYearModal}>
+                  <Plus size={16} />
+                  <span>Create Academic Year</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -951,119 +1147,113 @@ export const AcademicCalendarPage: React.FC = () => {
               <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Terms & Semesters</h2>
               <p style={{ fontSize: '13px', color: '#64748B' }}>Break down the academic year into evaluative teaching periods.</p>
             </div>
-            <button className="btn btn-primary btn-sm" onClick={() => showToast('New Term configuration modal opened', 'info')}>
-              <Plus size={14} />
-              <span>Add New Term</span>
-            </button>
           </div>
 
-          <div className="grid-split-balanced" style={{ gap: '20px' }}>
-            <div style={{ border: '1px solid #C7D2FE', background: '#F8FAFC', borderRadius: '12px', padding: '18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <span style={{ fontWeight: 800, color: '#4338CA', fontSize: '16px' }}>Term 1 (First Half)</span>
-                <span className="badge badge-success">Current Term</span>
-              </div>
-              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '14px' }}>01 Apr 2026 - 30 Sep 2026</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', fontSize: '12px' }}>
-                <div style={{ background: '#FFFFFF', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ color: '#94A3B8' }}>Working Days</div>
-                  <div style={{ fontWeight: 800, color: '#0F172A' }}>112</div>
-                </div>
-                <div style={{ background: '#FFFFFF', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ color: '#94A3B8' }}>Tuition Tests</div>
-                  <div style={{ fontWeight: 800, color: '#0F172A' }}>14</div>
-                </div>
-                <div style={{ background: '#FFFFFF', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ color: '#94A3B8' }}>Examinations</div>
-                  <div style={{ fontWeight: 800, color: '#0F172A' }}>2</div>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ border: '1px solid #E2E8F0', background: '#FFFFFF', borderRadius: '12px', padding: '18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <span style={{ fontWeight: 800, color: '#0F172A', fontSize: '16px' }}>Term 2 (Final Half)</span>
-                <span className="badge badge-neutral">Upcoming</span>
-              </div>
-              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '14px' }}>01 Oct 2026 - 31 Mar 2027</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', fontSize: '12px' }}>
-                <div style={{ background: '#F8FAFC', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ color: '#94A3B8' }}>Working Days</div>
-                  <div style={{ fontWeight: 800, color: '#0F172A' }}>108</div>
-                </div>
-                <div style={{ background: '#F8FAFC', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ color: '#94A3B8' }}>Tuition Tests</div>
-                  <div style={{ fontWeight: 800, color: '#0F172A' }}>16</div>
-                </div>
-                <div style={{ background: '#F8FAFC', padding: '8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ color: '#94A3B8' }}>Examinations</div>
-                  <div style={{ fontWeight: 800, color: '#0F172A' }}>2</div>
-                </div>
-              </div>
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center' }}>
+            <Layers size={44} color="#CBD5E1" style={{ marginBottom: '14px' }} />
+            <div style={{ fontSize: '16px', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>No terms or periods configured yet</div>
+            <p style={{ fontSize: '13px', color: '#64748B', maxWidth: '440px' }}>
+              Break down your active academic year into evaluation periods or semesters to track working days and assessments.
+            </p>
           </div>
         </div>
       )}
 
       {/* 4. Holidays Tab */}
-      {activeTab === 'Holidays' && (
-        <div className="card" style={{ padding: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-            <div>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Holiday Calendar & Breaks</h2>
-              <p style={{ fontSize: '13px', color: '#64748B' }}>Official vacation schedule, national holidays, and tuition center closures.</p>
+      {activeTab === 'Holidays' && (() => {
+        const holidays = events.filter((e) => e.type === 'Holiday');
+        return (
+          <div className="card" style={{ padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>Holiday Calendar & Breaks</h2>
+                <p style={{ fontSize: '13px', color: '#64748B' }}>Official vacation schedule, national holidays, and tuition center closures.</p>
+              </div>
+              {isAdmin && (
+                <button className="btn btn-primary btn-sm" onClick={() => openNewEventModal(undefined, 'Holiday')}>
+                  <Plus size={14} />
+                  <span>Add Holiday</span>
+                </button>
+              )}
             </div>
-            <button className="btn btn-primary btn-sm" onClick={() => openNewEventModal()}>
-              <Plus size={14} />
-              <span>Add Holiday</span>
-            </button>
-          </div>
 
-          <div className="table-container">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Holiday Name</th>
-                  <th>Dates</th>
-                  <th>Day</th>
-                  <th>Duration</th>
-                  <th>Category</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Gandhi Jayanti</td>
-                  <td>02 Oct 2026</td>
-                  <td>Friday</td>
-                  <td>1 Day</td>
-                  <td><span className="badge badge-info">National Holiday</span></td>
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Dussehra Vacation</td>
-                  <td>19 Oct 2026 - 24 Oct 2026</td>
-                  <td>Monday - Saturday</td>
-                  <td>6 Days</td>
-                  <td><span className="badge badge-warning">Vacation Break</span></td>
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Diwali Festival</td>
-                  <td>08 Nov 2026 - 10 Nov 2026</td>
-                  <td>Sunday - Tuesday</td>
-                  <td>3 Days</td>
-                  <td><span className="badge badge-purple">Festival Break</span></td>
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700, color: '#0F172A' }}>Republic Day</td>
-                  <td>26 Jan 2027</td>
-                  <td>Tuesday</td>
-                  <td>1 Day</td>
-                  <td><span className="badge badge-info">National Holiday</span></td>
-                </tr>
-              </tbody>
-            </table>
+            {holidays.length > 0 ? (
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Holiday Name</th>
+                      <th>Dates</th>
+                      <th>Day</th>
+                      <th>Duration</th>
+                      <th>Category</th>
+                      {isAdmin && <th style={{ textAlign: 'right' }}>Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {holidays.map((h) => {
+                      const dayName = new Date(h.date).toLocaleDateString('en-US', { weekday: 'long' });
+                      let durationStr = '1 Day';
+                      if (h.endDate && h.endDate !== h.date) {
+                        try {
+                          const diff = Math.round((new Date(h.endDate).getTime() - new Date(h.date).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                          if (diff > 1) durationStr = `${diff} Days`;
+                        } catch {}
+                      }
+
+                      return (
+                        <tr key={h.id}>
+                          <td style={{ fontWeight: 700, color: '#0F172A' }}>{h.title}</td>
+                          <td>{h.date}{h.endDate && h.endDate !== h.date ? ` - ${h.endDate}` : ''}</td>
+                          <td>{dayName}</td>
+                          <td>{durationStr}</td>
+                          <td><span className="badge badge-info">Holiday</span></td>
+                          {isAdmin && (
+                            <td style={{ textAlign: 'right' }}>
+                              <div style={{ display: 'inline-flex', gap: '4px' }}>
+                                <button
+                                  className="btn btn-secondary btn-icon"
+                                  style={{ width: '28px', height: '28px', padding: 0 }}
+                                  onClick={() => openEditEventModal(h)}
+                                  title="Edit Holiday"
+                                >
+                                  <Edit2 size={13} color="#475569" />
+                                </button>
+                                <button
+                                  className="btn btn-secondary btn-icon"
+                                  style={{ width: '28px', height: '28px', padding: 0 }}
+                                  onClick={() => handleDeleteEvent(h.id, h.title)}
+                                  title="Delete Holiday"
+                                >
+                                  <Trash2 size={13} color="#EF4444" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center' }}>
+                <Sun size={44} color="#CBD5E1" style={{ marginBottom: '14px' }} />
+                <div style={{ fontSize: '16px', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>No holidays scheduled yet</div>
+                <p style={{ fontSize: '13px', color: '#64748B', maxWidth: '420px', marginBottom: '18px' }}>
+                  Official vacation schedules, national holidays, and tuition center closures will appear here once scheduled.
+                </p>
+                {isAdmin && (
+                  <button className="btn btn-primary" onClick={() => openNewEventModal(undefined, 'Holiday')}>
+                    <Plus size={16} />
+                    <span>Add Holiday</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Add / Edit Event Modal */}
       {showAddModal && (
@@ -1130,9 +1320,9 @@ export const AcademicCalendarPage: React.FC = () => {
                       style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                     >
                       <option value="All Classes">All Classes</option>
-                      <option value="Class 10">Class 10</option>
-                      <option value="Class 9">Class 9</option>
-                      <option value="Class 8">Class 8</option>
+                      {availableClasses.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -1198,6 +1388,102 @@ export const AcademicCalendarPage: React.FC = () => {
                 </button>
                 <button type="submit" className="btn btn-primary">
                   {editingEventId ? 'Save Changes' : 'Schedule Event'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Academic Year Modal */}
+      {showYearModal && (
+        <div className="modal-backdrop" onClick={() => setShowYearModal(false)}>
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '480px', width: '90%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+          >
+            <div className="modal-header">
+              <h2 className="modal-title">{editingYear ? 'Edit Academic Year' : 'Create Academic Year'}</h2>
+              <button onClick={() => setShowYearModal(false)} aria-label="Close modal">
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveYear}>
+              <div className="modal-body" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {yearFormError && (
+                  <div style={{ padding: '10px 14px', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '6px', color: '#B91C1C', fontSize: '12.5px' }}>
+                    {yearFormError}
+                  </div>
+                )}
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                    Academic Session / Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Academic Year 2026 - 2027"
+                    value={yearForm.name}
+                    onChange={(e) => setYearForm({ ...yearForm, name: e.target.value })}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+
+                <div className="grid-2-col" style={{ gap: '14px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                      Start Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={yearForm.startsOn}
+                      onChange={(e) => setYearForm({ ...yearForm, startsOn: e.target.value })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                      End Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      min={yearForm.startsOn}
+                      value={yearForm.endsOn}
+                      onChange={(e) => setYearForm({ ...yearForm, endsOn: e.target.value })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
+                    Initial Status
+                  </label>
+                  <select
+                    value={yearForm.status}
+                    onChange={(e) => setYearForm({ ...yearForm, status: e.target.value as any })}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  >
+                    <option value="planned">Planned (Upcoming session)</option>
+                    <option value="active">Active (Current operating session)</option>
+                    <option value="completed">Completed</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowYearModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  {editingYear ? 'Save Changes' : 'Create Academic Year'}
                 </button>
               </div>
             </form>

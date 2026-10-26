@@ -292,7 +292,7 @@ feesRouter.get('/:institutionId/fees/payments', async (c) => {
     receiptNo: p.receipt_no,
     studentId: p.student_id,
     studentName: `${p.first_name} ${p.last_name || ''}`.trim(),
-    class: p.class_name || 'Class 10',
+    class: p.class_name || 'Unassigned',
     amount: Math.round(p.amount_paise / 100),
     method: p.method.toUpperCase(),
     date: p.received_at.slice(0, 10),

@@ -71,6 +71,7 @@ export interface Teacher {
   gender: 'Male' | 'Female';
   address: string;
   subjects: string[];
+  subject?: string;
   classes: string[];
   status: 'Active' | 'Inactive';
   totalStudents: number;
@@ -93,6 +94,7 @@ export interface BatchItem {
   id: string;
   name: string;
   className: string;
+  classId?: string;
   timing: string;
   studentsCount: number;
   teacher: string;
@@ -184,6 +186,8 @@ export interface FeeRecord {
   transactionId?: string;
   status: 'Paid' | 'Pending' | 'Overdue';
   receiptNo?: string;
+  parentName?: string;
+  phone?: string;
 }
 
 export interface Announcement {
@@ -227,3 +231,15 @@ export interface HomeworkItem {
   submissionsCount?: number;
   totalStudents?: number;
 }
+
+export interface AcademicYear {
+  id: string;
+  name: string;
+  starts_on: string;
+  ends_on: string;
+  status: 'planned' | 'active' | 'completed' | 'archived';
+  created_at?: string;
+  updated_at?: string;
+  enrolled_students?: number;
+}
+

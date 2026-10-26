@@ -27,6 +27,7 @@ export const StudentFeesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid' | 'Partial'>('All');
   const [classFilter, setClassFilter] = useState('All Classes');
+  const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   // Record Payment Modal
@@ -53,10 +54,14 @@ export const StudentFeesPage: React.FC = () => {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const res = await api.fees.getRecords(activeInstitutionId);
+      const [res, over] = await Promise.all([
+        api.fees.getRecords(activeInstitutionId),
+        api.academics.getOverview(activeInstitutionId).catch(() => null)
+      ]);
       const list = res.records || [];
       setFeeRecords(list);
       saveStoredStudentFees(list);
+      setClassesList(over?.classes || []);
     } catch (err) {
       console.error('Failed to load student fees:', err);
       setLoadError(err instanceof Error ? err.message : 'Failed to load fee records');
@@ -288,8 +293,8 @@ export const StudentFeesPage: React.FC = () => {
               ₹{totalCollected.toLocaleString('en-IN')}
             </div>
             <div className="stat-footer">
-              <span className="stat-badge-change positive">{Math.round((totalCollected / (totalAssigned || 1)) * 100)}%</span>
-              <span className="stat-subtext">Collection rate</span>
+              <span className="stat-badge-change positive">{totalAssigned > 0 ? `${Math.round((totalCollected / totalAssigned) * 100)}%` : '—'}</span>
+              <span className="stat-subtext">{totalAssigned > 0 ? 'Collection rate' : 'No payments collected yet'}</span>
             </div>
           </div>
         </div>
@@ -367,9 +372,9 @@ export const StudentFeesPage: React.FC = () => {
               onChange={(e) => setClassFilter(e.target.value)}
             >
               <option value="All Classes">All Classes</option>
-              <option value="Class 10">Class 10</option>
-              <option value="Class 9">Class 9</option>
-              <option value="Class 8">Class 8</option>
+              {classesList.map((c) => (
+                <option key={c.id || c.name} value={c.name}>{c.name}</option>
+              ))}
             </select>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   Download,
@@ -14,6 +14,7 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { api } from '../../api/client';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
 import {
@@ -28,9 +29,17 @@ import {
 type ReportCategory = 'student' | 'attendance' | 'school-exam' | 'tuition-test' | 'fees';
 
 export const ReportsCenterPage: React.FC = () => {
-  const { showToast } = useApp();
+  const { showToast, activeInstitutionId } = useApp();
   const [selectedReport, setSelectedReport] = useState<ReportCategory>('student');
   const [selectedClass, setSelectedClass] = useState<string>('All Classes');
+  const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (!activeInstitutionId) return;
+    api.academics.getOverview(activeInstitutionId)
+      .then((res: any) => setClassesList(res?.classes || []))
+      .catch(() => {});
+  }, [activeInstitutionId]);
 
   // Load real operational data from persistent storage
   const students = getStoredStudents();
@@ -75,7 +84,7 @@ export const ReportsCenterPage: React.FC = () => {
           rollNo: m.rollNo || '—',
           name: m.studentName || 'Student',
           exam: ex?.name || 'Examination',
-          class: className || 'Class 10',
+          class: className || 'Unassigned',
           subject: subject || 'General',
           marks: m.marks,
           max,
@@ -398,9 +407,9 @@ export const ReportsCenterPage: React.FC = () => {
                 onChange={(e) => setSelectedClass(e.target.value)}
               >
                 <option value="All Classes">All Classes</option>
-                <option value="Class 10">Class 10</option>
-                <option value="Class 9">Class 9</option>
-                <option value="Class 8">Class 8</option>
+                {classesList.map((c) => (
+                  <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                ))}
               </select>
             </div>
           </div>

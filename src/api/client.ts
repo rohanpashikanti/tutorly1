@@ -12,6 +12,7 @@ import {
   FeeRecord,
   Announcement,
   CalendarEvent,
+  AcademicYear,
 } from '../types';
 
 async function handleResponse<T>(res: Response): Promise<T> {
@@ -101,6 +102,49 @@ export const api = {
         body: JSON.stringify(data),
       });
       return handleResponse<{ success: boolean; id: string; name: string }>(res);
+    },
+    async listAcademicYears(institutionId: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/academic-years`, { credentials: 'same-origin' });
+      return handleResponse<{ academicYears: AcademicYear[] }>(res);
+    },
+    async createAcademicYear(institutionId: string, data: { name: string; startsOn: string; endsOn: string; status?: string }) {
+      const res = await fetch(`/api/institutions/${institutionId}/academic-years`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      return handleResponse<{ success: boolean; academicYear: AcademicYear }>(res);
+    },
+    async updateAcademicYear(institutionId: string, id: string, data: { name?: string; startsOn?: string; endsOn?: string; status?: string }) {
+      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      return handleResponse<{ success: boolean; academicYear: AcademicYear }>(res);
+    },
+    async activateAcademicYear(institutionId: string, id: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}/activate`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+      });
+      return handleResponse<{ success: boolean; activeId: string }>(res);
+    },
+    async archiveAcademicYear(institutionId: string, id: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}/archive`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+      });
+      return handleResponse<{ success: boolean; archivedId: string }>(res);
+    },
+    async deleteAcademicYear(institutionId: string, id: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      return handleResponse<{ success: boolean; deletedId: string }>(res);
     },
   },
 
