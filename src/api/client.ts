@@ -357,14 +357,33 @@ export const api = {
       const res = await fetch(`/api/institutions/${institutionId}/users`, { credentials: 'same-origin' });
       return handleResponse<{ users: any[] }>(res);
     },
-    async create(institutionId: string, data: { name: string; email: string; role: string }) {
+    async create(
+      institutionId: string,
+      data: {
+        name: string;
+        email: string;
+        role: string;
+        password?: string;
+        designation?: string;
+        phone?: string;
+        address?: string;
+        assignments?: any[];
+        studentIds?: string[];
+        relationship?: string;
+      }
+    ) {
       const res = await fetch(`/api/institutions/${institutionId}/users`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(data),
       });
-      return handleResponse<{ success: boolean; membershipId: string }>(res);
+      return handleResponse<{
+        success: boolean;
+        user: { id: string; membershipId: string; name: string; email: string; role: string };
+        isNewAccount: boolean;
+        temporaryPassword?: string;
+      }>(res);
     },
     async updateStatus(institutionId: string, membershipId: string, status: string) {
       const res = await fetch(`/api/institutions/${institutionId}/users/${membershipId}/status`, {
@@ -373,7 +392,21 @@ export const api = {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ status }),
       });
-      return handleResponse<{ success: boolean }>(res);
+      return handleResponse<{ success: boolean; status: string }>(res);
+    },
+    async resetPassword(institutionId: string, membershipId: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/users/${membershipId}/reset-password`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      return handleResponse<{ success: boolean; temporaryPassword: string; message: string }>(res);
+    },
+    async resendInvite(institutionId: string, membershipId: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/users/${membershipId}/resend-invite`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      return handleResponse<{ success: boolean; temporaryPassword: string; message: string }>(res);
     },
   },
 
@@ -407,6 +440,36 @@ export const api = {
         credentials: 'same-origin',
       });
       return handleResponse<{ guardian: any; children: any[] }>(res);
+    },
+    async getChildFees(institutionId: string, studentId: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/parent/children/${studentId}/fees`, {
+        credentials: 'same-origin',
+      });
+      return handleResponse<{
+        studentId: string;
+        studentName: string;
+        totalBilled: number;
+        totalPaid: number;
+        dueAmount: number;
+        totalRemaining: number;
+        status: string;
+        dueDate: string;
+        payments: any[];
+      }>(res);
+    },
+    async getChildAttendance(institutionId: string, studentId: string) {
+      const res = await fetch(`/api/institutions/${institutionId}/parent/children/${studentId}/attendance`, {
+        credentials: 'same-origin',
+      });
+      return handleResponse<{
+        studentId: string;
+        totalSessions: number;
+        presentCount: number;
+        absentCount: number;
+        lateCount: number;
+        attendanceRate: number;
+        records: any[];
+      }>(res);
     },
     async getTeacher(institutionId: string) {
       const res = await fetch(`/api/institutions/${institutionId}/teacher/portal`, {

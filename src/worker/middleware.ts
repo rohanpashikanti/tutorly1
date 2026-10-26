@@ -104,6 +104,19 @@ export async function hasVerifiedGuardianAccess(
   institutionId: string,
   studentId: string
 ): Promise<boolean> {
+  const adminCheck = await db
+    .prepare(
+      `SELECT 1 AS allowed
+       FROM memberships m
+       JOIN user_refs ur ON ur.id = m.user_ref_id
+       WHERE ur.provider = 'better-auth' AND ur.provider_subject = ?
+         AND m.institution_id = ? AND m.role IN ('owner', 'admin') AND m.status = 'active'
+       LIMIT 1`
+    )
+    .bind(userId, institutionId)
+    .first<{ allowed: number }>();
+  if (adminCheck?.allowed === 1) return true;
+
   const relation = await db
     .prepare(
       `

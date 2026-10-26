@@ -14,8 +14,7 @@ import {
   getStoredTuitionTests,
   getStoredTuitionTestMarks,
   getStoredSchoolExams,
-  getStoredSchoolExamMarks,
-  getStoredStudents
+  getStoredSchoolExamMarks
 } from '../../utils/storage';
 import { downloadSampleDocument } from '../../utils/demoActions';
 
@@ -45,12 +44,13 @@ export const ParentAcademicProgress: React.FC = () => {
           if (res.children.length > 0 && !selectedChildId) {
             setSelectedChildId(res.children[0].id);
           }
+        } else {
+          setChildren([]);
         }
       })
       .catch((err) => {
         setLoadError(err.message || 'Failed to load children');
-        const stored = getStoredStudents();
-        setChildren(stored);
+        setChildren([]);
       });
   }, [activeInstitutionId, selectedChildId, setSelectedChildId]);
 

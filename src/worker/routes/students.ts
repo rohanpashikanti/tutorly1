@@ -7,6 +7,11 @@ studentsRouter.get('/:institutionId/students', async (c) => {
   const auth = await authenticateInstitution(c);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
+  // Parents are strictly prohibited from viewing the school-wide student directory
+  if (auth.membership.role === 'parent') {
+    return c.json({ error: 'Forbidden: Parents cannot access the student directory' }, 403);
+  }
+
   const { DB } = c.env;
   const instId = auth.institutionId;
 
@@ -15,7 +20,21 @@ studentsRouter.get('/:institutionId/students', async (c) => {
   const batchFilter = c.req.query('batch') || 'All Batches';
   const statusFilter = c.req.query('status') || 'All Status';
 
-  // Base student query
+  // Base student query with scoping for teachers
+  let teacherScopeSql = '';
+  const bindings: unknown[] = [instId];
+
+  if (auth.membership.role === 'teacher') {
+    teacherScopeSql = ` AND s.id IN (
+      SELECT e2.student_id
+      FROM enrollments e2
+      JOIN teacher_assignments ta2 ON ta2.institution_id = e2.institution_id AND ta2.class_id = e2.class_id AND (ta2.batch_id IS NULL OR ta2.batch_id = e2.batch_id) AND ta2.status = 'active'
+      JOIN teachers t2 ON t2.id = ta2.teacher_id
+      WHERE t2.membership_id = ? AND e2.status = 'active'
+    )`;
+    bindings.push(auth.membership.id);
+  }
+
   const query = `
     SELECT s.id, s.admission_no, s.roll_no, s.first_name, s.last_name, s.avatar_url,
            s.gender, s.date_of_birth, s.admission_date, s.phone, s.email, s.address, s.status,
@@ -28,11 +47,11 @@ studentsRouter.get('/:institutionId/students', async (c) => {
     LEFT JOIN batches b ON b.id = e.batch_id
     LEFT JOIN student_guardians sg ON sg.student_id = s.id AND sg.institution_id = s.institution_id AND sg.is_primary = 1
     LEFT JOIN guardians g ON g.id = sg.guardian_id
-    WHERE s.institution_id = ? AND s.deleted_at IS NULL
+    WHERE s.institution_id = ? AND s.deleted_at IS NULL${teacherScopeSql}
     ORDER BY s.created_at DESC
   `;
 
-  const rawStudents = await DB.prepare(query).bind(instId).all<{
+  const rawStudents = await DB.prepare(query).bind(...bindings).all<{
     id: string;
     admission_no: string;
     roll_no: string | null;
@@ -237,6 +256,20 @@ studentsRouter.get('/:institutionId/students/:studentId', async (c) => {
       .first<{ 1: number }>();
 
     if (!allowed) return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  // If role is teacher, ensure student is enrolled in one of the teacher's assigned cohorts
+  if (auth.membership.role === 'teacher') {
+    const isAssigned = await DB.prepare(
+      `SELECT 1 FROM enrollments e
+       JOIN teacher_assignments ta ON ta.institution_id = e.institution_id AND ta.class_id = e.class_id AND (ta.batch_id IS NULL OR ta.batch_id = e.batch_id) AND ta.status = 'active'
+       JOIN teachers t ON t.id = ta.teacher_id
+       WHERE e.institution_id = ? AND e.student_id = ? AND t.membership_id = ? AND e.status = 'active'`
+    )
+      .bind(instId, studentId, auth.membership.id)
+      .first<{ 1: number }>();
+
+    if (!isAssigned) return c.json({ error: 'Forbidden: Student is not in your assigned classes or batches' }, 403);
   }
 
   return c.json({ student: s });

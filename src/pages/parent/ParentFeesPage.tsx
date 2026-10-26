@@ -16,8 +16,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../api/client';
-import { getStoredFeeRecords, getStoredStudents } from '../../utils/storage';
-import { FeeRecord } from '../../types';
 import { downloadSampleDocument, triggerPrint } from '../../utils/demoActions';
 
 interface PaymentRecord {
@@ -30,10 +28,21 @@ interface PaymentRecord {
   status: 'Paid';
 }
 
+interface ChildFeeData {
+  studentId: string;
+  totalBilled: number;
+  totalPaid: number;
+  dueAmount: number;
+  totalRemaining: number;
+  status: 'Paid' | 'Pending';
+  dueDate: string;
+  payments: PaymentRecord[];
+}
+
 export const ParentFeesPage: React.FC = () => {
   const { selectedChildId, setSelectedChildId, activeInstitutionId, institutionName, showToast } = useApp();
   const [children, setChildren] = useState<any[]>([]);
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
+  const [childFeeData, setChildFeeData] = useState<ChildFeeData | null>(null);
   const [isPayModalOpen, setIsPayModalOpen] = useState<boolean>(false);
   const [paymentMethod, setPaymentMethod] = useState<'UPI' | 'Card' | 'Net Banking'>('UPI');
   const [selectedReceipt, setSelectedReceipt] = useState<PaymentRecord | null>(null);
@@ -48,40 +57,57 @@ export const ParentFeesPage: React.FC = () => {
           if (res.children.length > 0 && !selectedChildId) {
             setSelectedChildId(res.children[0].id);
           }
+        } else {
+          setChildren([]);
         }
       })
       .catch((err) => {
         setLoadError(err.message || 'Failed to load children');
-        const stored = getStoredStudents();
-        setChildren(stored);
-      });
-
-    // Load fee records from API
-    api.fees.getRecords(activeInstitutionId)
-      .then((res) => {
-        if (res && res.records) {
-          setFeeRecords(res.records);
-        } else {
-          setFeeRecords([]);
-        }
-      })
-      .catch(() => {
-        setFeeRecords(getStoredFeeRecords());
+        setChildren([]);
       });
   }, [activeInstitutionId, selectedChildId, setSelectedChildId]);
 
   const activeChild = children.find((c) => c.id === selectedChildId) || children[0] || null;
 
-  // Active child's fee record
-  const childFeeRecord = useMemo(() => {
-    if (!activeChild) return null;
-    return feeRecords.find(
-      (r) => r.studentId === activeChild.id || r.studentName === activeChild.name
-    ) || null;
-  }, [activeChild, feeRecords]);
+  // Load fee and payment history for the active child from live server
+  useEffect(() => {
+    if (!activeChild || !activeInstitutionId) {
+      setChildFeeData(null);
+      return;
+    }
+    api.portals.getChildFees(activeInstitutionId, activeChild.id)
+      .then((res) => {
+        if (res) {
+          setChildFeeData({
+            studentId: res.studentId,
+            totalBilled: res.totalBilled || 0,
+            totalPaid: res.totalPaid || 0,
+            dueAmount: res.dueAmount || 0,
+            totalRemaining: res.totalRemaining || 0,
+            status: res.status === 'Pending' || res.dueAmount > 0 ? 'Pending' : 'Paid',
+            dueDate: res.dueDate || '—',
+            payments: (res.payments || []).map((p: any) => ({
+              id: p.id,
+              date: p.date,
+              period: p.period || 'Tuition Fee',
+              amount: p.amount,
+              method: p.method,
+              receiptNo: p.receiptNo,
+              status: 'Paid' as const,
+            })),
+          });
+        } else {
+          setChildFeeData(null);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load child fees:', err);
+        setChildFeeData(null);
+      });
+  }, [activeInstitutionId, activeChild?.id]);
 
   const currentFeeState = useMemo(() => {
-    if (!childFeeRecord) {
+    if (!childFeeData) {
       return {
         period: 'Tuition Fee',
         status: 'Paid' as const,
@@ -90,31 +116,17 @@ export const ParentFeesPage: React.FC = () => {
         dueDate: '—'
       };
     }
-    const isPaid = childFeeRecord.status === 'Paid' || childFeeRecord.outstandingAmount === 0;
     return {
-      period: childFeeRecord.feePlan || 'Tuition Fee',
-      status: isPaid ? ('Paid' as const) : ('Pending' as const),
-      dueAmount: childFeeRecord.outstandingAmount,
-      totalRemaining: childFeeRecord.outstandingAmount,
-      dueDate: childFeeRecord.dueDate || '—'
+      period: 'Tuition Fee',
+      status: childFeeData.status,
+      dueAmount: childFeeData.dueAmount,
+      totalRemaining: childFeeData.totalRemaining,
+      dueDate: childFeeData.dueDate
     };
-  }, [childFeeRecord]);
+  }, [childFeeData]);
 
-  // Real payment receipts derived from fee record
-  const currentPayments: PaymentRecord[] = useMemo(() => {
-    if (!childFeeRecord || childFeeRecord.paidAmount <= 0) return [];
-    return [
-      {
-        id: `pay-${childFeeRecord.id}`,
-        date: childFeeRecord.paymentDate || '—',
-        period: childFeeRecord.feePlan || 'Tuition Fee',
-        amount: childFeeRecord.paidAmount,
-        method: childFeeRecord.paymentMethod || 'Cash',
-        receiptNo: childFeeRecord.receiptNo || `REC-${childFeeRecord.id.substring(0, 8).toUpperCase()}`,
-        status: 'Paid'
-      }
-    ];
-  }, [childFeeRecord]);
+  // Real payment receipts loaded from server
+  const currentPayments: PaymentRecord[] = childFeeData?.payments || [];
 
   const handleDownloadReceipt = (receipt: PaymentRecord) => {
     if (!activeChild) return;

@@ -113,10 +113,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return;
       }
       setSession(payload);
-      setActiveInstitutionId((existing) => payload.memberships.some((membership) => membership.institutionId === existing)
-        ? existing
-        : payload.memberships[0]?.institutionId || '');
-      setCurrentRoute(payload.memberships.length ? 'admin-dashboard' : 'onboarding');
+      setActiveInstitutionId((existing) => {
+        const nextId = payload.memberships.some((membership) => membership.institutionId === existing)
+          ? existing
+          : payload.memberships[0]?.institutionId || '';
+        const activeRole = payload.memberships.find((m) => m.institutionId === nextId)?.role;
+        const defaultRoute = !payload.memberships.length
+          ? 'onboarding'
+          : activeRole === 'teacher'
+          ? 'teacher-dashboard'
+          : activeRole === 'parent'
+          ? 'parent-dashboard'
+          : 'admin-dashboard';
+        setCurrentRoute(defaultRoute);
+        return nextId;
+      });
     } catch {
       setSession(null);
     } finally {
@@ -129,8 +140,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     void requestSession().then((payload) => {
       if (cancelled) return;
       setSession(payload);
-      setActiveInstitutionId(payload?.memberships[0]?.institutionId || '');
-      setCurrentRoute(payload?.memberships.length ? 'admin-dashboard' : payload ? 'onboarding' : 'login');
+      const nextInstId = payload?.memberships[0]?.institutionId || '';
+      setActiveInstitutionId(nextInstId);
+      const activeRole = payload?.memberships.find((m) => m.institutionId === nextInstId)?.role;
+      const defaultRoute = !payload
+        ? 'login'
+        : !payload.memberships.length
+        ? 'onboarding'
+        : activeRole === 'teacher'
+        ? 'teacher-dashboard'
+        : activeRole === 'parent'
+        ? 'parent-dashboard'
+        : 'admin-dashboard';
+      setCurrentRoute(defaultRoute);
     }).catch(() => {
       if (!cancelled) setSession(null);
     }).finally(() => {

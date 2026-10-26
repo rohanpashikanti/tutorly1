@@ -42,7 +42,7 @@ feesRouter.get('/:institutionId/fees/plans', async (c) => {
 });
 
 feesRouter.get('/:institutionId/fees/records', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const { DB } = c.env;
@@ -259,7 +259,7 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
 });
 
 feesRouter.get('/:institutionId/fees/payments', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const raw = await c.env.DB.prepare(
@@ -304,7 +304,7 @@ feesRouter.get('/:institutionId/fees/payments', async (c) => {
 });
 
 feesRouter.get('/:institutionId/fees/reports', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const { DB } = c.env;

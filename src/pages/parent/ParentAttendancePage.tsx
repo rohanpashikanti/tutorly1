@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../api/client';
-import { getStoredAttendanceSessions, getStoredStudents } from '../../utils/storage';
 import { downloadCSV } from '../../utils/demoActions';
 
 interface AttendanceRecord {
@@ -26,6 +25,7 @@ interface AttendanceRecord {
 export const ParentAttendancePage: React.FC = () => {
   const { selectedChildId, setSelectedChildId, activeInstitutionId, showToast } = useApp();
   const [children, setChildren] = useState<any[]>([]);
+  const [childRecords, setChildRecords] = useState<AttendanceRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Present' | 'Absent' | 'Late'>('All');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -38,48 +38,54 @@ export const ParentAttendancePage: React.FC = () => {
           if (res.children.length > 0 && !selectedChildId) {
             setSelectedChildId(res.children[0].id);
           }
+        } else {
+          setChildren([]);
         }
       })
       .catch((err) => {
         setLoadError(err.message || 'Failed to load children');
-        const stored = getStoredStudents();
-        setChildren(stored);
+        setChildren([]);
       });
   }, [activeInstitutionId, selectedChildId, setSelectedChildId]);
 
   const activeChild = children.find((c) => c.id === selectedChildId) || children[0] || null;
 
-  // Real chronological attendance records for active child
-  const childRecords: AttendanceRecord[] = useMemo(() => {
-    if (!activeChild) return [];
-    const sessions = Object.values(getStoredAttendanceSessions());
-    const records: AttendanceRecord[] = [];
-
-    sessions.forEach((s) => {
-      const match = s.records?.find(
-        (r) => r.studentId === activeChild.id || r.studentName === activeChild.name
-      );
-      if (match) {
-        let parsedDay = '—';
-        try {
-          parsedDay = new Date(s.date).toLocaleDateString('en-US', { weekday: 'long' });
-        } catch {
-          // ignore
+  // Real chronological attendance records for active child loaded from server
+  useEffect(() => {
+    if (!activeChild || !activeInstitutionId) {
+      setChildRecords([]);
+      return;
+    }
+    api.portals.getChildAttendance(activeInstitutionId, activeChild.id)
+      .then((res) => {
+        if (res && res.records) {
+          const formatted: AttendanceRecord[] = res.records.map((r: any) => {
+            let parsedDay = '—';
+            try {
+              parsedDay = new Date(r.date).toLocaleDateString('en-US', { weekday: 'long' });
+            } catch {
+              // ignore
+            }
+            return {
+              id: r.id,
+              date: r.date,
+              day: parsedDay,
+              batch: r.batch || r.class || 'Regular Batch',
+              status: r.status,
+              remarks: r.remarks,
+              month: r.month || (r.date ? r.date.substring(0, 7) : 'All'),
+            };
+          });
+          setChildRecords(formatted);
+        } else {
+          setChildRecords([]);
         }
-        records.push({
-          id: `${s.savedAt || s.date}-${activeChild.id}`,
-          date: s.date,
-          day: parsedDay,
-          batch: `${s.className} - ${s.batch}`,
-          status: match.status === 'Not Marked' ? 'Pending Verification' : match.status,
-          remarks: match.remarks,
-          month: s.date ? s.date.substring(0, 7) : 'All'
-        });
-      }
-    });
-
-    return records.sort((a, b) => b.date.localeCompare(a.date));
-  }, [activeChild]);
+      })
+      .catch((err) => {
+        console.error('Failed to load child attendance:', err);
+        setChildRecords([]);
+      });
+  }, [activeInstitutionId, activeChild?.id]);
 
   // Extract available months
   const availableMonths = useMemo(() => {
