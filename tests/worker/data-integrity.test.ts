@@ -106,6 +106,16 @@ describe('Data Integrity & Empty-State Regression Tests (P0 Remediation)', () =>
     // Collections, events must be empty arrays
     expect(data.upcomingEvents).toEqual([]);
     expect(data.monthlyCollections).toEqual([]);
+
+    // Attendance reports endpoint must also return 0 metrics
+    const attRepRes = await request(`/api/institutions/${institutionId}/attendance/reports`, {
+      headers: { cookie: owner.cookie, 'x-institution-id': institutionId },
+    });
+    expect(attRepRes.status).toBe(200);
+    const attRepData = await attRepRes.json() as any;
+    expect(attRepData.overallAverage).toBe(0);
+    expect(attRepData.todayAttendanceRate).toBe(0);
+    expect(attRepData.batchPerformance).toEqual([]);
   });
 
   it('guarantees student directory returns 0 count and newly enrolled students have 0 default metrics', async () => {

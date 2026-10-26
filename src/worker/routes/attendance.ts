@@ -267,8 +267,37 @@ attendanceRouter.get('/:institutionId/attendance/reports', async (c) => {
     .bind(instId)
     .all<{ batch_name: string; class_name: string; total_records: number; present_count: number }>();
 
+  // Total institution-wide attendance rate
+  const overallSummary = await DB.prepare(
+    `SELECT COUNT(ar.id) AS total_records,
+            SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
+     FROM attendance_records ar
+     WHERE ar.institution_id = ?`
+  )
+    .bind(instId)
+    .first<{ total_records: number; present_count: number }>();
+
+  const overallAvg = overallSummary && overallSummary.total_records > 0
+    ? Math.round((overallSummary.present_count / overallSummary.total_records) * 100)
+    : 0;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todaySummary = await DB.prepare(
+    `SELECT COUNT(ar.id) AS total_records,
+            SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
+     FROM attendance_sessions s
+     JOIN attendance_records ar ON ar.session_id = s.id AND ar.institution_id = s.institution_id
+     WHERE s.institution_id = ? AND s.session_date = ?`
+  )
+    .bind(instId, todayStr)
+    .first<{ total_records: number; present_count: number }>();
+
+  const todayRate = todaySummary && todaySummary.total_records > 0
+    ? Math.round((todaySummary.present_count / todaySummary.total_records) * 100)
+    : 0;
+
   const batches = batchStatsRaw.results.map((b) => {
-    const rate = b.total_records > 0 ? Math.round((b.present_count / b.total_records) * 100) : 92;
+    const rate = b.total_records > 0 ? Math.round((b.present_count / b.total_records) * 100) : 0;
     return {
       name: `${b.class_name} - ${b.batch_name}`,
       percentage: rate,
@@ -277,8 +306,8 @@ attendanceRouter.get('/:institutionId/attendance/reports', async (c) => {
   });
 
   return c.json({
-    overallAverage: 91.5,
-    todayAttendanceRate: 92,
+    overallAverage: overallAvg,
+    todayAttendanceRate: todayRate,
     batchPerformance: batches,
   });
 });
