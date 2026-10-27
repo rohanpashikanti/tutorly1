@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Users,
   UserCheck,
@@ -26,20 +26,20 @@ import { useApp } from '../../context/AppContext';
 import { Student, FeeRecord } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { ParentContactActions } from '../../components/common/ParentContactActions';
-import {
-  getStoredStudents,
-  saveStoredStudents,
-  getStoredStudentFees,
-  saveStoredStudentFees
-} from '../../utils/storage';
 import { api } from '../../api/client';
+
+const STUDENT_PAGE_SIZE = 25;
 
 export const StudentDirectory: React.FC = () => {
   const { navigateTo, showToast, activeInstitutionId } = useApp();
-  const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
+  const [students, setStudents] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalStudents, setTotalStudents] = useState(0);
+  const [studentSummary, setStudentSummary] = useState({ total: 0, active: 0, inactive: 0, classes: 0 });
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState('All Classes');
   const [selectedBatch, setSelectedBatch] = useState('All Batches');
   const [selectedStatus, setSelectedStatus] = useState('All Status');
@@ -51,32 +51,86 @@ export const StudentDirectory: React.FC = () => {
   const [addStudentIdempotencyKey, setAddStudentIdempotencyKey] = useState(() =>
     typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
   );
+  const studentRequestVersion = useRef(0);
+  const activeListQuery = useRef('');
+  const activeListPage = useRef(0);
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const invalidateStudentList = () => {
+    studentRequestVersion.current += 1;
+    activeListQuery.current = '';
+    activeListPage.current = 0;
+    setIsLoading(false);
+    setStudents([]);
+    setTotalStudents(0);
+    setStudentSummary({ total: 0, active: 0, inactive: 0, classes: 0 });
+    setActiveDrawerStudent(null);
+    setSelectedStudentIds([]);
+  };
 
 
-  const loadStudents = React.useCallback(async () => {
+  const loadStudents = React.useCallback(async (requestedPage = page) => {
     if (!activeInstitutionId) return;
+    const query = {
+      page: requestedPage,
+      limit: STUDENT_PAGE_SIZE,
+      search: debouncedSearchQuery,
+      class: selectedClass === 'All Classes' ? undefined : selectedClass,
+      batch: selectedBatch === 'All Batches' ? undefined : selectedBatch,
+      status: selectedStatus === 'All Status' ? undefined : selectedStatus,
+    };
+    const { page: _page, ...queryFilters } = query;
+    const queryKey = JSON.stringify([activeInstitutionId, queryFilters]);
+    const requestVersion = ++studentRequestVersion.current;
+    if (activeListQuery.current !== queryKey) {
+      activeListQuery.current = queryKey;
+      activeListPage.current = requestedPage;
+      setStudents([]);
+      setTotalStudents(0);
+      setStudentSummary({ total: 0, active: 0, inactive: 0, classes: 0 });
+      setActiveDrawerStudent(null);
+      setSelectedStudentIds([]);
+    } else if (activeListPage.current !== requestedPage) {
+      activeListPage.current = requestedPage;
+      setStudents([]);
+      setActiveDrawerStudent(null);
+    }
     setIsLoading(true);
     setLoadError(null);
     try {
-      const res = await api.students.list(activeInstitutionId);
+      const res = await api.students.list(activeInstitutionId, query);
+      if (requestVersion !== studentRequestVersion.current) return;
+      if (requestedPage > Math.max(1, res.totalPages)) {
+        setPage(Math.max(1, res.totalPages));
+        return;
+      }
       const studentList = res.students || [];
       setStudents(studentList);
-      saveStoredStudents(studentList);
+      setTotalStudents(res.total || 0);
+      setStudentSummary(res.summary || { total: res.total || 0, active: 0, inactive: 0, classes: 0 });
       if (studentList.length > 0) {
         setActiveDrawerStudent((prev) => (prev ? studentList.find(s => s.id === prev.id) || studentList[0] : studentList[0]));
       } else {
         setActiveDrawerStudent(null);
       }
     } catch (err) {
+      if (requestVersion !== studentRequestVersion.current) return;
       console.error('Error fetching students from D1:', err);
       setLoadError(err instanceof Error ? err.message : 'Failed to load students');
     } finally {
-      setIsLoading(false);
+      if (requestVersion === studentRequestVersion.current) setIsLoading(false);
     }
-  }, [activeInstitutionId]);
+  }, [activeInstitutionId, page, debouncedSearchQuery, selectedClass, selectedBatch, selectedStatus]);
 
   React.useEffect(() => {
     void loadStudents();
+    return () => {
+      studentRequestVersion.current += 1;
+    };
   }, [loadStudents]);
 
   const [availableClasses, setAvailableClasses] = useState<{ id: string; name: string }[]>([]);
@@ -237,7 +291,8 @@ export const StudentDirectory: React.FC = () => {
       if (activeDrawerStudent?.id === student.id) {
         setActiveDrawerStudent(null);
       }
-      await loadStudents();
+      setPage(1);
+      await loadStudents(1);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to delete student', 'error');
     } finally {
@@ -245,33 +300,27 @@ export const StudentDirectory: React.FC = () => {
     }
   };
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     const headers = ['Admission No', 'Roll No', 'Name', 'Class', 'Batch', 'Parent Name', 'Phone', 'Attendance Rate', 'Status'];
-    const rows = filteredStudents.map((s) => [
-      s.admissionNo,
-      s.rollNo,
-      s.name,
-      s.class,
-      s.batch,
-      s.parent.fatherName,
-      s.parent.phone,
-      `${s.attendanceRate}%`,
-      s.status
-    ]);
-    downloadCSV(`Students_Directory_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
-    showToast(`Exported ${filteredStudents.length} students to CSV`, 'success');
+    try {
+      const allFilteredStudents = await api.students.listAll(activeInstitutionId, {
+        search: searchQuery,
+        class: selectedClass === 'All Classes' ? undefined : selectedClass,
+        batch: selectedBatch === 'All Batches' ? undefined : selectedBatch,
+        status: selectedStatus === 'All Status' ? undefined : selectedStatus,
+      });
+      const rows = allFilteredStudents.map((s) => [
+        s.admissionNo, s.rollNo, s.name, s.class, s.batch, s.parent.fatherName,
+        s.parent.phone, `${s.attendanceRate}%`, s.status,
+      ]);
+      downloadCSV(`Students_Directory_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+      showToast(`Exported ${allFilteredStudents.length} students to CSV`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to export students', 'error');
+    }
   };
 
-  const filteredStudents = students.filter((s) => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.admissionNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.parent.fatherName.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesClass = selectedClass === 'All Classes' || s.class === selectedClass;
-    const matchesBatch = selectedBatch === 'All Batches' || s.batch === selectedBatch;
-    const matchesStatus = selectedStatus === 'All Status' || s.status === selectedStatus;
-    return matchesSearch && matchesClass && matchesBatch && matchesStatus;
-  });
+  const filteredStudents = students;
 
   const handleAddStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -293,7 +342,8 @@ export const StudentDirectory: React.FC = () => {
       setAddStudentIdempotencyKey(
         typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `idemp-${Date.now()}`
       );
-      await loadStudents();
+      setPage(1);
+      await loadStudents(1);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to enroll student', 'error');
     } finally {
@@ -342,7 +392,7 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Total Students</div>
-            <div className="stat-value">{isLoading ? '—' : students.length}</div>
+            <div className="stat-value">{isLoading ? '—' : studentSummary.total}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Enrolled in institute</span>
             </div>
@@ -355,7 +405,7 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Active Students</div>
-            <div className="stat-value">{isLoading ? '—' : students.filter(s => s.status === 'Active').length}</div>
+            <div className="stat-value">{isLoading ? '—' : studentSummary.active}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Currently attending</span>
             </div>
@@ -368,7 +418,7 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Classes Represented</div>
-            <div className="stat-value">{isLoading ? '—' : new Set(students.map(s => s.class)).size}</div>
+            <div className="stat-value">{isLoading ? '—' : studentSummary.classes}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Active grade levels</span>
             </div>
@@ -381,7 +431,7 @@ export const StudentDirectory: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Inactive Students</div>
-            <div className="stat-value">{isLoading ? '—' : students.filter(s => s.status === 'Inactive').length}</div>
+            <div className="stat-value">{isLoading ? '—' : studentSummary.inactive}</div>
             <div className="stat-footer">
               <span className="stat-subtext">Archived or withdrawn</span>
             </div>
@@ -402,14 +452,22 @@ export const StudentDirectory: React.FC = () => {
                 type="text"
                 placeholder="Search students..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setPage(1);
+                  invalidateStudentList();
+                }}
               />
             </div>
 
             <select
               className="select-field"
               value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
+              onChange={(e) => {
+                setSelectedClass(e.target.value);
+                setPage(1);
+                invalidateStudentList();
+              }}
             >
               <option>All Classes</option>
               {availableClasses.map((c) => (
@@ -420,7 +478,11 @@ export const StudentDirectory: React.FC = () => {
             <select
               className="select-field"
               value={selectedBatch}
-              onChange={(e) => setSelectedBatch(e.target.value)}
+              onChange={(e) => {
+                setSelectedBatch(e.target.value);
+                setPage(1);
+                invalidateStudentList();
+              }}
             >
               <option>All Batches</option>
               {availableBatches.map((b) => (
@@ -431,7 +493,11 @@ export const StudentDirectory: React.FC = () => {
             <select
               className="select-field"
               value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
+              onChange={(e) => {
+                setSelectedStatus(e.target.value);
+                setPage(1);
+                invalidateStudentList();
+              }}
             >
               <option>All Status</option>
               <option>Active</option>
@@ -447,12 +513,13 @@ export const StudentDirectory: React.FC = () => {
                   <th style={{ width: '40px' }}>
                     <input
                       type="checkbox"
-                      checked={selectedStudentIds.length === filteredStudents.length && filteredStudents.length > 0}
+                      checked={filteredStudents.length > 0 && filteredStudents.every((student) => selectedStudentIds.includes(student.id))}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedStudentIds(filteredStudents.map((s) => s.id));
+                          setSelectedStudentIds((previous) => Array.from(new Set([...previous, ...filteredStudents.map((s) => s.id)])));
                         } else {
-                          setSelectedStudentIds([]);
+                          const pageIds = new Set(filteredStudents.map((student) => student.id));
+                          setSelectedStudentIds((previous) => previous.filter((id) => !pageIds.has(id)));
                         }
                       }}
                     />
@@ -476,7 +543,7 @@ export const StudentDirectory: React.FC = () => {
                         No students found
                       </div>
                       <div style={{ fontSize: '13px' }}>
-                        {students.length === 0 ? 'No students have been enrolled yet. Click "Add Student" to enroll your first student.' : 'No students match the current search and filter criteria.'}
+                        {totalStudents === 0 ? 'No students have been enrolled yet. Click "Add Student" to enroll your first student.' : 'No students match the current search and filter criteria.'}
                       </div>
                     </td>
                   </tr>
@@ -496,14 +563,14 @@ export const StudentDirectory: React.FC = () => {
                             checked={isChecked}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                setSelectedStudentIds([...selectedStudentIds, student.id]);
+                                setSelectedStudentIds((previous) => previous.includes(student.id) ? previous : [...previous, student.id]);
                               } else {
-                                setSelectedStudentIds(selectedStudentIds.filter((id) => id !== student.id));
+                                setSelectedStudentIds((previous) => previous.filter((id) => id !== student.id));
                               }
                             }}
                           />
                         </td>
-                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{idx + 1}</td>
+                        <td style={{ color: '#94A3B8', fontSize: '12px' }}>{(page - 1) * STUDENT_PAGE_SIZE + idx + 1}</td>
                         <td>
                           <div className="user-table-cell">
                             <img src={student.avatar} alt={student.name} className="user-table-avatar" />
@@ -586,11 +653,11 @@ export const StudentDirectory: React.FC = () => {
 
           {/* Pagination Footer */}
           <div style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12.5px', color: '#64748B' }}>
-            <span>Showing {filteredStudents.length > 0 ? 1 : 0}-{filteredStudents.length} of {filteredStudents.length} students</span>
+            <span>Showing {totalStudents === 0 ? 0 : (page - 1) * STUDENT_PAGE_SIZE + 1}-{(page - 1) * STUDENT_PAGE_SIZE + filteredStudents.length} of {totalStudents} students</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <button className="btn btn-sm btn-secondary" disabled>‹</button>
-              <button className="btn btn-sm btn-primary" style={{ minWidth: '28px', padding: '4px' }}>1</button>
-              <button className="btn btn-sm btn-secondary" disabled>›</button>
+              <button className="btn btn-sm btn-secondary" disabled={isLoading || page <= 1} onClick={() => { studentRequestVersion.current += 1; setStudents([]); setActiveDrawerStudent(null); setPage((current) => current - 1); }}>‹</button>
+              <span aria-live="polite" style={{ minWidth: '58px', textAlign: 'center' }}>{totalStudents === 0 ? '0 / 0' : `${page} / ${Math.ceil(totalStudents / STUDENT_PAGE_SIZE)}`}</span>
+              <button className="btn btn-sm btn-secondary" disabled={isLoading || page >= Math.ceil(totalStudents / STUDENT_PAGE_SIZE)} onClick={() => { studentRequestVersion.current += 1; setStudents([]); setActiveDrawerStudent(null); setPage((current) => current + 1); }}>›</button>
             </div>
           </div>
         </div>

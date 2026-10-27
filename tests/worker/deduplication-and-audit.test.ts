@@ -381,7 +381,7 @@ describe('Tutorly Deduplication, Teacher Creation & Performance Audit Suite', ()
 
     const attKey = `att-${crypto.randomUUID()}`;
     const attPayload = {
-      date: '2026-10-26',
+      date: '2026-10-27',
       class: 'Class 10',
       batch: 'Batch A',
       records: [{ studentId, status: 'Present', remarks: 'On time' }],
@@ -404,7 +404,7 @@ describe('Tutorly Deduplication, Teacher Creation & Performance Audit Suite', ()
 
     // Only one session should exist for that date and class/batch
     const sessionCount = await db.prepare(
-      `SELECT COUNT(*) as count FROM attendance_sessions WHERE institution_id = ? AND session_date = '2026-10-26'`
+      `SELECT COUNT(*) as count FROM attendance_sessions WHERE institution_id = ? AND session_date = '2026-10-27'`
     ).bind(institutionId).first<{ count: number }>();
     expect(sessionCount?.count).toBe(1);
   });

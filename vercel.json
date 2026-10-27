@@ -1,12 +1,23 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, must-revalidate"
+        }
+      ]
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:match*",
       "destination": "https://tutorly-api.innovateuxclub.workers.dev/api/:match*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/|api$|assets/|icons/|sw\\.js$|manifest\\.webmanifest$|favicon\\.svg$|icons\\.svg$|offline\\.html$|.*\\.js$|.*\\.css$|.*\\.png$|.*\\.svg$|.*\\.ico$|.*\\.webmanifest$|.*\\.woff2?$).*)",
       "destination": "/index.html"
     }
   ]

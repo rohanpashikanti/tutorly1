@@ -88,7 +88,9 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
       if (t.status === 'scheduled') mappedStatus = 'Scheduled';
       else if (t.status === 'ongoing') mappedStatus = 'Ongoing';
 
-      const avgPercent = t.avg_marks && t.max_marks > 0 ? Math.round((t.avg_marks / t.max_marks) * 100) : 0;
+      const avgPercent = t.avg_marks !== null && t.max_marks > 0
+        ? Math.round((t.avg_marks / t.max_marks) * 100)
+        : null;
 
       return {
         id: t.id,
@@ -297,9 +299,11 @@ assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (
   const marksList = enrolled.results.map((e, idx) => {
     const existing = marksMap.get(e.student_id);
     const marksVal = existing?.marks ?? null;
-    const percentage = marksVal !== null && asm.max_marks > 0 ? Math.round((marksVal / asm.max_marks) * 100) : 0;
+    const percentage = marksVal !== null && asm.max_marks > 0
+      ? Math.round((marksVal / asm.max_marks) * 100)
+      : null;
     let grade = '—';
-    if (marksVal !== null) {
+    if (percentage !== null) {
       if (percentage >= 90) grade = 'A+';
       else if (percentage >= 80) grade = 'A';
       else if (percentage >= 70) grade = 'B';
@@ -320,7 +324,11 @@ assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (
       grade,
       percentage,
       remarks: existing?.remarks || '',
-      status: (existing?.status === 'published' ? 'Published' : existing ? 'Entered' : 'Draft') as 'Draft' | 'Entered' | 'Published',
+      status: existing?.status === 'published'
+        ? 'Published'
+        : existing?.status === 'entered'
+        ? 'Entered'
+        : 'Draft',
     };
   });
 
@@ -344,41 +352,112 @@ assessmentsRouter.post('/:institutionId/assessments/:assessmentId/marks', async 
   const { DB } = c.env;
   const instId = auth.institutionId;
 
-  const asm = await DB.prepare(`SELECT id, max_marks FROM assessments WHERE id = ? AND institution_id = ?`)
-    .bind(assessmentId, instId).first<{ id: string; max_marks: number }>();
+  const asm = await DB.prepare(
+    `SELECT id, academic_year_id, class_id, batch_id, max_marks
+     FROM assessments WHERE id = ? AND institution_id = ?`
+  ).bind(assessmentId, instId).first<{
+    id: string;
+    academic_year_id: string;
+    class_id: string;
+    batch_id: string | null;
+    max_marks: number;
+  }>();
   if (!asm) return c.json({ error: 'Assessment not found' }, 404);
 
-  const statements = [];
-  for (const item of studentMarks as Array<{
+  const normalizedMarks: Array<{
     studentId: string;
     enrollmentId?: string;
-    marks: number;
-    remarks?: string;
-  }>) {
-    const markVal = Math.min(Math.max(0, Number(item.marks || 0)), asm.max_marks);
-    const recId = `mrk-${crypto.randomUUID().slice(0, 8)}`;
-
-    let enrId = item.enrollmentId;
-    if (!enrId) {
-      const enrRec = await DB.prepare(`SELECT id FROM enrollments WHERE institution_id = ? AND student_id = ? AND status = 'active'`)
-        .bind(instId, item.studentId).first<{ id: string }>();
-      enrId = enrRec?.id;
+    marks: number | null;
+    remarks?: string | null;
+  }> = [];
+  const seenStudents = new Set<string>();
+  for (const value of studentMarks as unknown[]) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return c.json({ error: 'Invalid mark entry' }, 400);
     }
+    const item = value as Record<string, unknown>;
+    if (typeof item.studentId !== 'string' || !item.studentId.trim() || item.studentId.length > 128) {
+      return c.json({ error: 'Invalid student identifier' }, 400);
+    }
+    const studentId = item.studentId.trim();
+    if (seenStudents.has(studentId)) return c.json({ error: 'Duplicate student in marks submission' }, 400);
+    seenStudents.add(studentId);
 
-    if (enrId) {
-      statements.push(
-        DB.prepare(
-          `INSERT INTO assessment_marks (id, institution_id, assessment_id, student_id, enrollment_id, marks, remarks, status, entered_by_membership_id, entered_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'published', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-           ON CONFLICT(assessment_id, student_id) DO UPDATE SET
-             marks = excluded.marks,
-             remarks = excluded.remarks,
-             status = 'published',
-             entered_at = excluded.entered_at`
-        ).bind(recId, instId, assessmentId, item.studentId, enrId, markVal, item.remarks || null, auth.membership.id)
-      );
+    if (item.enrollmentId !== undefined && (typeof item.enrollmentId !== 'string' || !item.enrollmentId.trim())) {
+      return c.json({ error: 'Invalid enrollment identifier' }, 400);
+    }
+    const hasMarks = Object.prototype.hasOwnProperty.call(item, 'marks');
+    if (!hasMarks) continue;
+    const marks = item.marks;
+    if (marks !== null && (typeof marks !== 'number' || !Number.isSafeInteger(marks))) {
+      return c.json({ error: 'Marks must be a whole number or null for an ungraded mark' }, 400);
+    }
+    if (typeof marks === 'number' && (marks < 0 || marks > asm.max_marks)) {
+      return c.json({ error: `Marks must be between 0 and ${asm.max_marks}` }, 400);
+    }
+    if (item.remarks !== undefined && item.remarks !== null && typeof item.remarks !== 'string') {
+      return c.json({ error: 'Remarks must be text' }, 400);
+    }
+    normalizedMarks.push({
+      studentId,
+      ...(typeof item.enrollmentId === 'string' ? { enrollmentId: item.enrollmentId.trim() } : {}),
+      marks: marks as number | null,
+      ...(item.remarks === undefined ? {} : { remarks: item.remarks as string | null }),
+    });
+  }
+  if (normalizedMarks.length === 0) return c.json({ error: 'No mark values provided' }, 400);
+
+  // Validate the entire submitted cohort in one query before preparing any writes.
+  const enrollmentValidation = await DB.prepare(
+    `WITH submitted(student_id) AS (SELECT value FROM json_each(?))
+     SELECT submitted.student_id, e.id AS enrollment_id
+     FROM submitted
+     LEFT JOIN students s ON s.id = submitted.student_id
+       AND s.institution_id = ? AND s.status = 'active' AND s.deleted_at IS NULL
+     LEFT JOIN enrollments e ON e.institution_id = s.institution_id AND e.student_id = s.id
+       AND e.academic_year_id = ? AND e.class_id = ? AND e.status = 'active'
+       AND (? IS NULL OR e.batch_id = ?)`
+  ).bind(
+    JSON.stringify(normalizedMarks.map((item) => item.studentId)),
+    instId,
+    asm.academic_year_id,
+    asm.class_id,
+    asm.batch_id,
+    asm.batch_id,
+  ).all<{ student_id: string; enrollment_id: string | null }>();
+  const enrollmentByStudent = new Map(enrollmentValidation.results.map((row) => [row.student_id, row.enrollment_id]));
+  for (const item of normalizedMarks) {
+    const enrollmentId = enrollmentByStudent.get(item.studentId);
+    if (!enrollmentId || (item.enrollmentId && item.enrollmentId !== enrollmentId)) {
+      return c.json({ error: 'Student is not validly enrolled in this assessment' }, 400);
     }
   }
+
+  const statements = normalizedMarks.map((item) => {
+    const recId = `mrk-${crypto.randomUUID().slice(0, 8)}`;
+    const hasRemarks = item.remarks !== undefined;
+    return DB.prepare(
+      `INSERT INTO assessment_marks (id, institution_id, assessment_id, student_id, enrollment_id, marks, remarks, status, entered_by_membership_id, entered_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       ON CONFLICT(assessment_id, student_id) DO UPDATE SET
+         enrollment_id = excluded.enrollment_id,
+         marks = excluded.marks,
+         remarks = CASE WHEN ? = 1 THEN excluded.remarks ELSE assessment_marks.remarks END,
+         status = excluded.status,
+         entered_at = excluded.entered_at`
+    ).bind(
+      recId,
+      instId,
+      assessmentId,
+      item.studentId,
+      enrollmentByStudent.get(item.studentId),
+      item.marks,
+      item.remarks ?? null,
+      item.marks === null ? 'draft' : 'published',
+      auth.membership.id,
+      hasRemarks ? 1 : 0,
+    );
+  });
 
   if (statements.length > 0) {
     try {
@@ -389,7 +468,7 @@ assessmentsRouter.post('/:institutionId/assessments/:assessmentId/marks', async 
     }
   }
 
-  return c.json({ success: true, message: 'Marks updated and published successfully' });
+  return c.json({ success: true, message: 'Marks updated successfully' });
 });
 
 assessmentsRouter.delete('/:institutionId/assessments/:assessmentId', async (c) => {

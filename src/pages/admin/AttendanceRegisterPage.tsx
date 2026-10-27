@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import {
   ClipboardCheck,
   Save,
@@ -15,6 +15,12 @@ import { useApp } from '../../context/AppContext';
 import { downloadCSV } from '../../utils/demoActions';
 import { getStoredAttendanceSessions, saveStoredAttendanceSession, AttendanceSession } from '../../utils/storage';
 import { api } from '../../api/client';
+import {
+  getAttendanceIdempotencyAttempt,
+  isCurrentAttendanceLoad,
+  isCurrentAttendanceScope,
+  runAttendanceSubmission,
+} from '../../utils/attendanceSubmission';
 
 import { ClassItem, BatchItem } from '../../types';
 
@@ -51,6 +57,20 @@ export const AttendanceRegisterPage: React.FC = () => {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [attemptedSaveWithIncomplete, setAttemptedSaveWithIncomplete] = useState<boolean>(false);
+  const savingLock = React.useRef(false);
+  const loadGeneration = React.useRef(0);
+  const idempotencyAttempt = React.useRef<ReturnType<typeof getAttendanceIdempotencyAttempt> | null>(null);
+  const attendanceScopeKey = JSON.stringify([activeInstitutionId, selectedClass, selectedBatch, selectedDate]);
+  const currentScopeKey = React.useRef(attendanceScopeKey);
+  const previousScopeKey = React.useRef(attendanceScopeKey);
+  useLayoutEffect(() => {
+    currentScopeKey.current = attendanceScopeKey;
+    if (previousScopeKey.current !== attendanceScopeKey) {
+      previousScopeKey.current = attendanceScopeKey;
+      setStudents([]);
+      setIsSaved(false);
+    }
+  }, [attendanceScopeKey]);
 
   useEffect(() => {
     if (!activeInstitutionId) return;
@@ -77,9 +97,13 @@ export const AttendanceRegisterPage: React.FC = () => {
   }, [activeInstitutionId]);
 
   const loadAttendance = React.useCallback(async () => {
+    const requestId = ++loadGeneration.current;
+    const requestScope = JSON.stringify([activeInstitutionId, selectedClass, selectedBatch, selectedDate]);
     if (!activeInstitutionId || !selectedClass) {
-      setStudents([]);
-      setIsLoading(false);
+      if (isCurrentAttendanceLoad(requestId, loadGeneration.current, requestScope, currentScopeKey.current)) {
+        setStudents([]);
+        setIsLoading(false);
+      }
       return;
     }
     setIsLoading(true);
@@ -90,6 +114,8 @@ export const AttendanceRegisterPage: React.FC = () => {
         class: selectedClass,
         batch: selectedBatch,
       });
+
+      if (!isCurrentAttendanceLoad(requestId, loadGeneration.current, requestScope, currentScopeKey.current)) return;
 
       if (res && res.records) {
         setStudents(
@@ -110,16 +136,19 @@ export const AttendanceRegisterPage: React.FC = () => {
         setIsSaved(false);
       }
     } catch (err) {
+      if (!isCurrentAttendanceLoad(requestId, loadGeneration.current, requestScope, currentScopeKey.current)) return;
       console.error('Error fetching attendance from D1:', err);
       setLoadError(err instanceof Error ? err.message : 'Failed to load attendance');
-      setStudents([]);
     } finally {
-      setIsLoading(false);
+      if (isCurrentAttendanceLoad(requestId, loadGeneration.current, requestScope, currentScopeKey.current)) setIsLoading(false);
     }
   }, [activeInstitutionId, selectedDate, selectedClass, selectedBatch]);
 
   useEffect(() => {
     void loadAttendance();
+    return () => {
+      loadGeneration.current += 1;
+    };
   }, [loadAttendance]);
 
   // Filter students by active class & batch
@@ -136,6 +165,7 @@ export const AttendanceRegisterPage: React.FC = () => {
 
   // Individual status update
   const setStudentStatus = (id: string, st: 'P' | 'A' | 'L') => {
+    if (savingLock.current) return;
     setStudents(prev => prev.map(s => (s.id === id ? { ...s, status: st } : s)));
     setIsSaved(false);
     setAttemptedSaveWithIncomplete(false);
@@ -143,12 +173,14 @@ export const AttendanceRegisterPage: React.FC = () => {
 
   // Remark update
   const setStudentRemark = (id: string, remark: string) => {
+    if (savingLock.current) return;
     setStudents(prev => prev.map(s => (s.id === id ? { ...s, remarks: remark } : s)));
     setIsSaved(false);
   };
 
   // Quick action: Select All Present
   const handleSelectAllPresent = () => {
+    if (savingLock.current) return;
     setStudents(prev => prev.map(s => (
       s.className === selectedClass && s.batch === selectedBatch
         ? { ...s, status: 'P' }
@@ -161,7 +193,7 @@ export const AttendanceRegisterPage: React.FC = () => {
 
   // Save attendance
   const handleSaveAttendance = async () => {
-    if (isSaving) return;
+    if (savingLock.current) return;
 
     // Validate that no students remain unmarked
     if (unmarkedCount > 0) {
@@ -176,32 +208,55 @@ export const AttendanceRegisterPage: React.FC = () => {
       'L': 'Late'
     };
 
-    const previousSavedState = isSaved;
-    setIsSaved(true);
-    setAttemptedSaveWithIncomplete(false);
-    showToast(`Attendance for ${selectedClass} - ${selectedBatch} saved!`, 'success');
+    if (!activeInstitutionId) {
+      showToast('Select an institution before saving attendance.', 'error');
+      return;
+    }
 
-    try {
-      await api.attendance.submit(activeInstitutionId, {
-        date: selectedDate,
-        class: selectedClass,
-        batch: selectedBatch,
-        records: currentCohort.map((s) => ({
+    const scopeKey = attendanceScopeKey;
+    const submission = {
+      date: selectedDate,
+      class: selectedClass,
+      batch: selectedBatch,
+      records: currentCohort.map((s) => ({
           studentId: s.id,
           status: statusMap[s.status as 'P' | 'A' | 'L'],
           remarks: s.remarks,
         })),
-      });
-      void loadAttendance();
-    } catch (err) {
-      setIsSaved(previousSavedState);
-      showToast(err instanceof Error ? err.message : 'Failed to save attendance', 'error', {
-        label: 'Retry',
-        onClick: () => void handleSaveAttendance(),
-      });
-    } finally {
-      setIsSaving(false);
-    }
+    };
+    const fingerprint = JSON.stringify([activeInstitutionId, submission]);
+    const attempt = getAttendanceIdempotencyAttempt(
+      idempotencyAttempt.current,
+      fingerprint,
+      () => crypto.randomUUID(),
+    );
+    idempotencyAttempt.current = attempt;
+    setAttemptedSaveWithIncomplete(false);
+
+    await runAttendanceSubmission(
+      savingLock,
+      () => api.attendance.submit(activeInstitutionId, { ...submission, idempotencyKey: attempt.key }),
+      {
+        onStart: () => setIsSaving(true),
+        onSuccess: () => {
+          if (!isCurrentAttendanceScope(scopeKey, currentScopeKey.current)) return;
+          setIsSaved(true);
+          idempotencyAttempt.current = null;
+          showToast(`Attendance for ${selectedClass} - ${selectedBatch} saved!`, 'success');
+          void loadAttendance();
+        },
+        onFailure: (err) => {
+          if (!isCurrentAttendanceScope(scopeKey, currentScopeKey.current)) return;
+          showToast(err instanceof Error ? err.message : 'Failed to save attendance', 'error', {
+            label: 'Retry',
+            onClick: () => {
+              if (isCurrentAttendanceScope(scopeKey, currentScopeKey.current)) void handleSaveAttendance();
+            },
+          });
+        },
+        onFinish: () => setIsSaving(false),
+      },
+    );
   };
 
   const handleExportCSV = () => {
@@ -247,6 +302,7 @@ export const AttendanceRegisterPage: React.FC = () => {
           <button
             className={`btn ${isSaved ? 'btn-secondary' : 'btn-primary'}`}
             disabled={isSaving}
+            aria-busy={isSaving}
             onClick={handleSaveAttendance}
             style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '140px', justifyContent: 'center' }}
           >
@@ -285,6 +341,7 @@ export const AttendanceRegisterPage: React.FC = () => {
             </label>
             <select
               className="select-field"
+              disabled={isSaving}
               style={{ fontWeight: 600, fontSize: '13px', minWidth: '130px', padding: '8px 12px' }}
               value={selectedClass}
               onChange={(e) => {
@@ -316,6 +373,7 @@ export const AttendanceRegisterPage: React.FC = () => {
               return (
                 <select
                   className="select-field"
+                  disabled={isSaving}
                   style={{ fontWeight: 600, fontSize: '13px', minWidth: '130px', padding: '8px 12px' }}
                   value={selectedBatch}
                   onChange={(e) => setSelectedBatch(e.target.value)}
@@ -340,6 +398,7 @@ export const AttendanceRegisterPage: React.FC = () => {
             <input
               type="date"
               className="select-field"
+              disabled={isSaving}
               style={{ fontWeight: 600, fontSize: '13px', padding: '8px 12px' }}
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
@@ -352,6 +411,7 @@ export const AttendanceRegisterPage: React.FC = () => {
           <button
             type="button"
             className="btn btn-secondary"
+            disabled={isSaving}
             onClick={handleSelectAllPresent}
             style={{
               borderColor: '#10B981',
@@ -428,6 +488,7 @@ export const AttendanceRegisterPage: React.FC = () => {
           <button
             type="button"
             className="btn btn-secondary btn-sm"
+            disabled={isSaving}
             onClick={handleSelectAllPresent}
             style={{ fontSize: '11.5px', padding: '4px 8px', whiteSpace: 'nowrap' }}
           >
@@ -510,6 +571,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                       <div className="att-pill-group-3">
                         <button
                           type="button"
+                          disabled={isSaving}
                           className={`att-pill-3 ${stu.status === 'P' ? 'active-P' : ''}`}
                           onClick={() => setStudentStatus(stu.id, 'P')}
                           aria-label={`Mark ${stu.name} Present`}
@@ -518,6 +580,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                         </button>
                         <button
                           type="button"
+                          disabled={isSaving}
                           className={`att-pill-3 ${stu.status === 'A' ? 'active-A' : ''}`}
                           onClick={() => setStudentStatus(stu.id, 'A')}
                           aria-label={`Mark ${stu.name} Absent`}
@@ -526,6 +589,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                         </button>
                         <button
                           type="button"
+                          disabled={isSaving}
                           className={`att-pill-3 ${stu.status === 'L' ? 'active-L' : ''}`}
                           onClick={() => setStudentStatus(stu.id, 'L')}
                           aria-label={`Mark ${stu.name} Late`}
@@ -538,6 +602,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                     <td>
                       <input
                         type="text"
+                        disabled={isSaving}
                         value={stu.remarks}
                         onChange={(e) => setStudentRemark(stu.id, e.target.value)}
                         placeholder="Add note..."
@@ -605,6 +670,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                 <div className="att-touch-btn-group-3">
                   <button
                     type="button"
+                    disabled={isSaving}
                     className={`att-touch-btn ${stu.status === 'P' ? 'active-P' : ''}`}
                     onClick={() => setStudentStatus(stu.id, 'P')}
                     aria-label={`Mark ${stu.name} Present`}
@@ -613,6 +679,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                   </button>
                   <button
                     type="button"
+                    disabled={isSaving}
                     className={`att-touch-btn ${stu.status === 'A' ? 'active-A' : ''}`}
                     onClick={() => setStudentStatus(stu.id, 'A')}
                     aria-label={`Mark ${stu.name} Absent`}
@@ -621,6 +688,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                   </button>
                   <button
                     type="button"
+                    disabled={isSaving}
                     className={`att-touch-btn ${stu.status === 'L' ? 'active-L' : ''}`}
                     onClick={() => setStudentStatus(stu.id, 'L')}
                     aria-label={`Mark ${stu.name} Late`}
@@ -632,6 +700,7 @@ export const AttendanceRegisterPage: React.FC = () => {
                 <div>
                   <input
                     type="text"
+                    disabled={isSaving}
                     value={stu.remarks}
                     onChange={(e) => setStudentRemark(stu.id, e.target.value)}
                     placeholder="Remarks (optional)..."
@@ -663,10 +732,11 @@ export const AttendanceRegisterPage: React.FC = () => {
           <button
             className="btn btn-primary"
             disabled={isSaving}
+            aria-busy={isSaving}
             style={{ padding: '9px 18px', fontSize: '13.5px', fontWeight: 700 }}
             onClick={handleSaveAttendance}
           >
-            <Save size={15} />
+            {isSaving ? <Clock size={15} /> : <Save size={15} />}
             <span>{isSaving ? 'Saving...' : 'Save'}</span>
           </button>
         </div>

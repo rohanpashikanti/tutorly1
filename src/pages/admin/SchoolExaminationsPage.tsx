@@ -22,6 +22,7 @@ import { Exam, ClassItem, SubjectItem } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
 import { api } from '../../api/client';
+import { isValidAssessmentMarkInput, parseAssessmentMarkInput, summarizeAssessmentMarks, toAssessmentMarkSubmission } from '../../utils/assessmentMarks';
 import {
   getStoredSchoolExams,
   saveStoredSchoolExams,
@@ -55,6 +56,7 @@ export const SchoolExaminationsPage: React.FC = () => {
   const [maxMarks, setMaxMarks] = useState<number>(100);
   const [examDate, setExamDate] = useState('2026-10-25');
   const [isSaved, setIsSaved] = useState(false);
+  const [isSavingMarks, setIsSavingMarks] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -156,7 +158,7 @@ export const SchoolExaminationsPage: React.FC = () => {
             name: m.studentName || 'Student',
             rollNo: m.rollNo || '',
             avatar: '',
-            marks: m.marks,
+            marks: typeof m.marks === 'number' ? m.marks : '',
             maxMarks: m.maxMarks || maxMarks,
             remarks: m.remarks || ''
           }));
@@ -199,7 +201,7 @@ export const SchoolExaminationsPage: React.FC = () => {
 
   const handleMarkChange = (id: string, val: string) => {
     setIsSaved(false);
-    const num = val === '' ? '' : Number(val);
+    const num = parseAssessmentMarkInput(val);
     setStudentMarks(prev => prev.map(s => (s.id === id ? { ...s, marks: num } : s)));
   };
 
@@ -209,37 +211,34 @@ export const SchoolExaminationsPage: React.FC = () => {
   };
 
   const handleSaveMarks = async () => {
-    // Validate marks against maxMarks
-    const hasError = studentMarks.some(s => typeof s.marks === 'number' && (s.marks < 0 || s.marks > maxMarks));
+    if (isSavingMarks) return;
+    const hasError = studentMarks.some((student) => !isValidAssessmentMarkInput(student.marks, maxMarks));
     if (hasError) {
-      showToast(`Please correct errors: marks cannot exceed maximum (${maxMarks}) or be negative`, 'error');
+      showToast(`Please enter whole marks from 0 to ${maxMarks}`, 'error');
       return;
     }
 
-    const previousIsSaved = isSaved;
-    // Optimistically update screen immediately
-    setIsSaved(true);
-    showToast(`Saved marks for ${currentExam?.name || 'Exam'} (${selectedSubject})!`, 'success');
-
-    // Send request in background
-    api.assessments.saveMarks(
-      activeInstitutionId,
-      selectedExamId,
-      studentMarks.map(s => ({
-        studentId: s.id,
-        marks: typeof s.marks === 'number' ? s.marks : 0,
-        remarks: s.remarks
-      }))
-    ).catch(err => {
-      // Rollback on failure
-      setIsSaved(previousIsSaved);
+    setIsSavingMarks(true);
+    try {
+      const result = await api.assessments.saveMarks(
+        activeInstitutionId,
+        selectedExamId,
+        toAssessmentMarkSubmission(studentMarks),
+      );
+      if (!result.success) throw new Error('The server did not confirm that marks were saved.');
+      setIsSaved(true);
+      showToast(`Saved marks for ${currentExam?.name || 'Exam'} (${selectedSubject})!`, 'success');
+    } catch (err) {
+      setIsSaved(false);
       showToast(err instanceof Error ? err.message : 'Failed to save marks to database', 'error', {
         label: 'Retry',
         onClick: () => {
           void handleSaveMarks();
         }
       });
-    });
+    } finally {
+      setIsSavingMarks(false);
+    }
   };
 
   const handleCreateExam = async (e: React.FormEvent) => {
@@ -301,7 +300,8 @@ export const SchoolExaminationsPage: React.FC = () => {
     try {
       await api.assessments.delete(activeInstitutionId, id);
       await refreshExams();
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
       const updated = exams.filter(e => e.id !== id);
       setExams(updated);
       saveStoredSchoolExams(updated);
@@ -313,12 +313,15 @@ export const SchoolExaminationsPage: React.FC = () => {
   };
 
   // Calculations for summary stats
-  const validMarks = studentMarks.filter(s => typeof s.marks === 'number').map(s => s.marks as number);
-  const avgMarks = validMarks.length > 0 ? Math.round(validMarks.reduce((a, b) => a + b, 0) / validMarks.length) : 0;
-  const avgPct = Math.round((avgMarks / maxMarks) * 100);
-  const highestMark = validMarks.length > 0 ? Math.max(...validMarks) : 0;
-  const passedCount = validMarks.filter(m => (m / maxMarks) >= 0.4).length;
-  const passRate = validMarks.length > 0 ? Math.round((passedCount / validMarks.length) * 100) : 0;
+  const marksSummary = summarizeAssessmentMarks(studentMarks.map((student) => student.marks), maxMarks);
+  const { enteredCount: validMarksCount, averageMarks: avgMarks, averagePercent: avgPct, highestMark, passRate } = marksSummary;
+  const passedCount = studentMarks.filter((student) => typeof student.marks === 'number' && (student.marks / maxMarks) * 100 >= 40).length;
+  const getStudentRank = (student: StudentMarkEntry) => {
+    const score = student.marks;
+    return typeof score === 'number'
+      ? studentMarks.filter((other) => typeof other.marks === 'number' && other.marks > score).length + 1
+      : null;
+  };
 
   const handleExportCSV = () => {
     const data = studentMarks.map((s, idx) => ({
@@ -340,14 +343,12 @@ export const SchoolExaminationsPage: React.FC = () => {
 
   const handleExportPDF = () => {
     const rows = studentMarks.map(s => {
-      const num = typeof s.marks === 'number' ? s.marks : 0;
-      const pct = Math.round((num / maxMarks) * 100);
       return {
         rollNo: s.rollNo,
         name: s.name,
         subject: selectedSubject,
-        score: `${s.marks} / ${maxMarks}`,
-        percentage: `${pct}%`,
+        score: s.marks === '' ? '—' : `${s.marks} / ${maxMarks}`,
+        percentage: s.marks === '' ? '—' : `${Math.round((s.marks / maxMarks) * 100)}%`,
         grade: calculateGrade(s.marks, maxMarks),
         remarks: s.remarks || '—'
       };
@@ -364,9 +365,9 @@ export const SchoolExaminationsPage: React.FC = () => {
         { label: 'Exam Date', value: examDate }
       ],
       summaryStats: [
-        { label: 'Class Average', value: `${avgPct}%` },
-        { label: 'Highest Score', value: `${highestMark}/${maxMarks}` },
-        { label: 'Pass Rate', value: `${passRate}%` },
+        { label: 'Class Average', value: avgPct === null ? '—' : `${avgPct}%` },
+        { label: 'Highest Score', value: highestMark === null ? '—' : `${highestMark}/${maxMarks}` },
+        { label: 'Pass Rate', value: passRate === null ? '—' : `${passRate}%` },
         { label: 'Total Students', value: String(studentMarks.length) }
       ],
       columns: [
@@ -530,9 +531,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Class Average</div>
-            <div className="stat-value">{validMarks.length > 0 ? `${avgPct}%` : '—'}</div>
+            <div className="stat-value">{avgPct === null ? '—' : `${avgPct}%`}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{validMarks.length > 0 ? `Avg: ${avgMarks} / ${maxMarks}` : 'No results recorded'}</span>
+              <span className="stat-subtext">{avgMarks === null ? 'No results recorded' : `Avg: ${avgMarks} / ${maxMarks}`}</span>
             </div>
           </div>
         </div>
@@ -543,9 +544,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Highest Score</div>
-            <div className="stat-value">{validMarks.length > 0 ? `${highestMark} / ${maxMarks}` : '—'}</div>
+            <div className="stat-value">{highestMark === null ? '—' : `${highestMark} / ${maxMarks}`}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{validMarks.length > 0 ? `${Math.round((highestMark / maxMarks) * 100)}% Top Marks` : 'No marks recorded'}</span>
+              <span className="stat-subtext">{highestMark === null ? 'No marks recorded' : `${Math.round((highestMark / maxMarks) * 100)}% Top Marks`}</span>
             </div>
           </div>
         </div>
@@ -556,9 +557,9 @@ export const SchoolExaminationsPage: React.FC = () => {
           </div>
           <div className="stat-content">
             <div className="stat-label">Pass Percentage</div>
-            <div className="stat-value">{validMarks.length > 0 ? `${passRate}%` : '—'}</div>
+            <div className="stat-value">{passRate === null ? '—' : `${passRate}%`}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{validMarks.length > 0 ? `${passedCount} of ${studentMarks.length} students` : 'No results recorded'}</span>
+              <span className="stat-subtext">{validMarksCount > 0 ? `${passedCount} of ${validMarksCount} entered marks` : 'No results recorded'}</span>
             </div>
           </div>
         </div>
@@ -591,9 +592,10 @@ export const SchoolExaminationsPage: React.FC = () => {
               <button
                 className={`btn ${isSaved ? 'btn-secondary' : 'btn-primary'}`}
                 onClick={handleSaveMarks}
+                disabled={isSavingMarks}
               >
-                {isSaved ? <Check size={15} color="#10B981" /> : <Save size={15} />}
-                <span>{isSaved ? 'Marks Saved' : 'Save Marks'}</span>
+                {isSavingMarks ? <Save size={15} /> : isSaved ? <Check size={15} color="#10B981" /> : <Save size={15} />}
+                <span>{isSavingMarks ? 'Saving…' : isSaved ? 'Marks Saved' : 'Save Marks'}</span>
               </button>
             </div>
           </div>
@@ -621,7 +623,7 @@ export const SchoolExaminationsPage: React.FC = () => {
                 ) : (
                   studentMarks.map((st, idx) => {
                     const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-                    const isExceeded = typeof st.marks === 'number' && (st.marks > maxMarks || st.marks < 0);
+                    const isExceeded = !isValidAssessmentMarkInput(st.marks, maxMarks);
                     const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : '—';
                     const grade = calculateGrade(st.marks, maxMarks);
 
@@ -643,7 +645,8 @@ export const SchoolExaminationsPage: React.FC = () => {
                               max={maxMarks}
                               value={st.marks}
                               onChange={(e) => handleMarkChange(st.id, e.target.value)}
-                              placeholder="0"
+                              step="1"
+                              placeholder="—"
                               style={{
                                 width: '76px',
                                 padding: '6px 10px',
@@ -697,7 +700,7 @@ export const SchoolExaminationsPage: React.FC = () => {
             ) : (
               studentMarks.map((st) => {
               const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-              const isExceeded = typeof st.marks === 'number' && (st.marks > maxMarks || st.marks < 0);
+              const isExceeded = !isValidAssessmentMarkInput(st.marks, maxMarks);
               const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : '—';
               const grade = calculateGrade(st.marks, maxMarks);
 
@@ -729,7 +732,8 @@ export const SchoolExaminationsPage: React.FC = () => {
                       max={maxMarks}
                       value={st.marks}
                       onChange={(e) => handleMarkChange(st.id, e.target.value)}
-                      placeholder="0"
+                      step="1"
+                      placeholder="—"
                       style={{
                         width: '74px',
                         padding: '6px 8px',
@@ -767,9 +771,9 @@ export const SchoolExaminationsPage: React.FC = () => {
             <span style={{ fontSize: '12.5px', color: '#64748B' }}>
               Showing {studentMarks.length} students enrolled in {selectedClass}
             </span>
-            <button className="btn btn-primary" onClick={handleSaveMarks}>
+            <button className="btn btn-primary" onClick={handleSaveMarks} disabled={isSavingMarks}>
               <Save size={15} />
-              <span>Save All Marks</span>
+              <span>{isSavingMarks ? 'Saving…' : 'Save All Marks'}</span>
             </button>
           </div>
         </div>
@@ -822,16 +826,17 @@ export const SchoolExaminationsPage: React.FC = () => {
                       const numB = typeof b.marks === 'number' ? b.marks : -1;
                       return numB - numA;
                     })
-                    .map((st, idx) => {
+                    .map((st) => {
                       const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-                      const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : 0;
-                      const isPassed = pct >= 40;
+                      const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : null;
+                      const isPassed = pct !== null && pct >= 40;
+                      const rank = getStudentRank(st);
                       const grade = calculateGrade(st.marks, maxMarks);
 
                       return (
                         <tr key={st.id}>
-                          <td style={{ textAlign: 'center', fontWeight: 800, color: idx < 3 ? '#4F46E5' : '#64748B' }}>
-                            #{idx + 1}
+                          <td style={{ textAlign: 'center', fontWeight: 800, color: rank !== null && rank <= 3 ? '#4F46E5' : '#64748B' }}>
+                            {rank === null ? '—' : `#${rank}`}
                           </td>
                           <td>
                             <div className="user-table-cell">
@@ -842,10 +847,10 @@ export const SchoolExaminationsPage: React.FC = () => {
                           <td style={{ color: '#64748B', fontSize: '13px' }}>{st.rollNo}</td>
                           <td style={{ fontWeight: 600, color: '#334155' }}>{selectedSubject}</td>
                           <td style={{ textAlign: 'center', fontWeight: 700, color: '#0F172A' }}>
-                            {st.marks} / {maxMarks}
+                            {st.marks === '' ? '—' : `${st.marks} / ${maxMarks}`}
                           </td>
                           <td style={{ textAlign: 'center', fontWeight: 700 }}>
-                            {pct}%
+                            {pct === null ? '—' : `${pct}%`}
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             <span className={`badge ${grade === 'A+' || grade === 'A' ? 'badge-success' : 'badge-info'}`}>
@@ -853,8 +858,8 @@ export const SchoolExaminationsPage: React.FC = () => {
                             </span>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <span className={`badge ${isPassed ? 'badge-success' : 'badge-danger'}`}>
-                              {isPassed ? 'Passed' : 'Needs Support'}
+                            <span className={`badge ${pct === null ? 'badge-info' : isPassed ? 'badge-success' : 'badge-danger'}`}>
+                              {pct === null ? 'Not graded' : isPassed ? 'Passed' : 'Needs Support'}
                             </span>
                           </td>
                           <td style={{ color: '#64748B', fontSize: '12px' }}>
@@ -881,10 +886,11 @@ export const SchoolExaminationsPage: React.FC = () => {
                   const numB = typeof b.marks === 'number' ? b.marks : -1;
                   return numB - numA;
                 })
-                .map((st, idx) => {
+                .map((st) => {
                   const numMarks = typeof st.marks === 'number' ? st.marks : 0;
-                  const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : 0;
-                  const isPassed = pct >= 40;
+                  const pct = typeof st.marks === 'number' ? Math.round((numMarks / maxMarks) * 100) : null;
+                  const isPassed = pct !== null && pct >= 40;
+                  const rank = getStudentRank(st);
                   const grade = calculateGrade(st.marks, maxMarks);
 
                   return (
@@ -895,21 +901,21 @@ export const SchoolExaminationsPage: React.FC = () => {
                             style={{
                               fontWeight: 800,
                               fontSize: '12px',
-                              color: idx < 3 ? '#4F46E5' : '#64748B',
-                              backgroundColor: idx < 3 ? '#EEF2FF' : '#F1F5F9',
+                              color: rank !== null && rank <= 3 ? '#4F46E5' : '#64748B',
+                              backgroundColor: rank !== null && rank <= 3 ? '#EEF2FF' : '#F1F5F9',
                               padding: '3px 8px',
                               borderRadius: '6px'
                             }}
                           >
-                            Rank #{idx + 1}
+                            {rank === null ? 'Not ranked' : `Rank #${rank}`}
                           </span>
                           <div>
                             <div style={{ fontWeight: 700, fontSize: '14px', color: '#0F172A' }}>{st.name}</div>
                             <div style={{ fontSize: '11.5px', color: '#64748B' }}>Roll #{st.rollNo}</div>
                           </div>
                         </div>
-                        <span className={`badge ${isPassed ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '11px', padding: '2px 8px' }}>
-                          {isPassed ? 'Passed' : 'Needs Support'}
+                        <span className={`badge ${pct === null ? 'badge-info' : isPassed ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '11px', padding: '2px 8px' }}>
+                          {pct === null ? 'Not graded' : isPassed ? 'Passed' : 'Needs Support'}
                         </span>
                       </div>
 
@@ -917,13 +923,13 @@ export const SchoolExaminationsPage: React.FC = () => {
                         <div>
                           <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Score</div>
                           <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
-                            {st.marks} / {maxMarks}
+                            {st.marks === '' ? '—' : `${st.marks} / ${maxMarks}`}
                           </div>
                         </div>
                         <div>
                           <div style={{ fontSize: '10.5px', color: '#64748B', fontWeight: 600 }}>Percentage</div>
                           <div style={{ fontSize: '14px', fontWeight: 800, color: '#4F46E5', marginTop: '2px' }}>
-                            {pct}%
+                            {pct === null ? '—' : `${pct}%`}
                           </div>
                         </div>
                         <div>

@@ -4,11 +4,20 @@ import {
   authenticateInstitution,
   readJson,
   extractIdempotencyKey,
-  getIdempotentResponse,
-  saveIdempotentResponse,
 } from '../middleware';
 
 export const feesRouter = new Hono<{ Bindings: Env }>();
+
+async function fingerprintPaymentRequest(payload: {
+  studentId: string;
+  amountPaise: number;
+  method: string;
+  notes: string | null;
+}): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 feesRouter.get('/:institutionId/fees/plans', async (c) => {
   const auth = await authenticateInstitution(c);
@@ -154,76 +163,109 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
   if (!body) return c.json({ error: 'Request body required' }, 400);
 
   const studentId = typeof body.studentId === 'string' ? body.studentId.trim() : '';
-  const amountRupees = Number(body.amount ?? 0);
-  const methodStr = typeof body.method === 'string' ? body.method.toLowerCase().trim() : 'cash';
-  const notes = typeof body.notes === 'string' ? body.notes.trim() : null;
+  const amountRupees = body.amount;
+  const methodStr = typeof body.method === 'string' ? body.method.toLowerCase().trim() : '';
+  const notes = typeof body.notes === 'string' && body.notes.trim() ? body.notes.trim() : null;
+  const bodyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
+  const headerKey = c.req.header('idempotency-key') || c.req.header('x-idempotency-key') || '';
+  const idempotencyKey = extractIdempotencyKey(c, body);
 
-  if (!studentId || amountRupees <= 0) {
+  if (!studentId || typeof amountRupees !== 'number' || !Number.isFinite(amountRupees) || amountRupees <= 0) {
     return c.json({ error: 'Student and positive payment amount are required' }, 400);
   }
+  const hasControlCharacter = idempotencyKey ? Array.from(idempotencyKey).some((character) => {
+    const codePoint = character.charCodeAt(0);
+    return codePoint < 0x20 || codePoint === 0x7f;
+  }) : false;
+  if (!idempotencyKey || idempotencyKey.length > 200 || hasControlCharacter) {
+    return c.json({ error: 'A valid idempotency key is required for a payment' }, 400);
+  }
+  if ((body.notes !== undefined && body.notes !== null && typeof body.notes !== 'string') ||
+      (bodyKey && headerKey.trim() && bodyKey !== headerKey.trim())) {
+    return c.json({ error: 'Invalid payment request' }, 400);
+  }
+  if (!['upi', 'cash', 'card', 'bank_transfer'].includes(methodStr)) {
+    return c.json({ error: 'A supported payment method is required' }, 400);
+  }
 
-  const method = ['upi', 'cash', 'card', 'bank_transfer'].includes(methodStr)
-    ? (methodStr as 'upi' | 'cash' | 'card' | 'bank_transfer')
-    : 'cash';
+  const method = methodStr as 'upi' | 'cash' | 'card' | 'bank_transfer';
+  const totalPaise = Math.round(amountRupees * 100);
+  if (!Number.isSafeInteger(totalPaise) || totalPaise <= 0) {
+    return c.json({ error: 'Payment amount must be a valid positive amount in paise' }, 400);
+  }
 
   const { DB } = c.env;
   const instId = auth.institutionId;
-
-  // 1. Idempotency Check
-  const idempotencyKey = extractIdempotencyKey(c, body);
-  const cachedResponse = await getIdempotentResponse(DB, instId, idempotencyKey);
-  if (cachedResponse) {
-    return c.json(cachedResponse.body, cachedResponse.status as any);
+  const requestHash = await fingerprintPaymentRequest({ studentId, amountPaise: totalPaise, method, notes });
+  // The existing table has institution-wide uniqueness; namespacing the stored key scopes
+  // this payment operation to the authenticated membership without changing other callers.
+  const scopedKey = `fee-payment:${auth.membership.id}:${idempotencyKey}`;
+  const endpoint = '/fees/payments';
+  const replay = await DB.prepare(
+    `SELECT endpoint, actor_membership_id, request_hash, status_code, response_body
+     FROM idempotency_keys
+     WHERE institution_id = ? AND idempotency_key = ?`
+  ).bind(instId, scopedKey).first<{
+    endpoint: string;
+    actor_membership_id: string | null;
+    request_hash: string | null;
+    status_code: number | null;
+    response_body: string | null;
+  }>();
+  if (replay) {
+    if (replay.endpoint !== endpoint || replay.actor_membership_id !== auth.membership.id || replay.request_hash !== requestHash) {
+      return c.json({ error: 'Idempotency key was already used for a different payment request' }, 409);
+    }
+    if (replay.status_code && replay.response_body) {
+      return c.json(JSON.parse(replay.response_body), replay.status_code as any);
+    }
+    return c.json({ error: 'Payment request is still being resolved; retry with the same key and details' }, 503);
   }
 
-  // 2. Verify student exists
   const student = await DB.prepare(
     `SELECT first_name, last_name FROM students WHERE id = ? AND institution_id = ? AND deleted_at IS NULL`
-  )
-    .bind(studentId, instId)
-    .first<{ first_name: string; last_name: string | null }>();
-
+  ).bind(studentId, instId).first<{ first_name: string; last_name: string | null }>();
   if (!student) return c.json({ error: 'Student not found' }, 404);
 
-  const totalPaise = Math.round(amountRupees * 100);
-
-  // 3. Rapid Double-Submission / Burst Payment Protection (within 5 seconds)
+  // Preserve the existing short-window guard against accidental distinct-key double clicks.
   const recentDuplicate = await DB.prepare(
-    `SELECT id, receipt_no
-     FROM payments
+    `SELECT id, receipt_no FROM payments
      WHERE institution_id = ? AND student_id = ? AND amount_paise = ?
        AND received_at >= datetime('now', '-5 seconds')
      LIMIT 1`
-  )
-    .bind(instId, studentId, totalPaise)
-    .first<{ id: string; receipt_no: string }>();
-
+  ).bind(instId, studentId, totalPaise).first<{ id: string; receipt_no: string }>();
   if (recentDuplicate) {
-    return c.json(
-      {
-        error: `A payment of ₹${amountRupees} for this student was just recorded (${recentDuplicate.receipt_no}). Duplicate payments are blocked.`,
-        existingPaymentId: recentDuplicate.id,
-        receiptNo: recentDuplicate.receipt_no,
-      },
-      409
-    );
+    return c.json({
+      error: `A payment of ₹${(totalPaise / 100).toLocaleString('en-IN')} for this student was just recorded (${recentDuplicate.receipt_no}). Duplicate payments are blocked.`,
+      existingPaymentId: recentDuplicate.id,
+      receiptNo: recentDuplicate.receipt_no,
+    }, 409);
   }
 
-  // 2. Find open charges for this student
   const openCharges = await DB.prepare(
     `SELECT fc.id, fc.amount_paise,
             COALESCE((SELECT SUM(amount_paise) FROM payment_allocations WHERE charge_id = fc.id), 0) AS paid_paise
      FROM fee_charges fc
      WHERE fc.student_id = ? AND fc.institution_id = ? AND fc.status IN ('open', 'partial')
      ORDER BY fc.due_on ASC, fc.id ASC`
-  )
-    .bind(studentId, instId)
-    .all<{ id: string; amount_paise: number; paid_paise: number }>();
+  ).bind(studentId, instId).all<{ id: string; amount_paise: number; paid_paise: number }>();
 
   const paymentId = `pmt-${crypto.randomUUID().slice(0, 8)}`;
   const receiptNo = `REC-2026-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
-
+  const responseBody = {
+    success: true,
+    message: 'Payment recorded and allocated successfully',
+    paymentId,
+    receiptNo,
+    amount: totalPaise / 100,
+    studentName: `${student.first_name} ${student.last_name || ''}`.trim(),
+  };
+  const expiresAt = '9999-12-31T23:59:59.999Z';
   const statements = [
+    DB.prepare(
+      `INSERT INTO idempotency_keys (id, institution_id, idempotency_key, endpoint, status_code, response_body, expires_at, actor_membership_id, request_hash)
+       VALUES (?, ?, ?, ?, 201, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), instId, scopedKey, endpoint, JSON.stringify(responseBody), expiresAt, auth.membership.id, requestHash),
     DB.prepare(
       `INSERT INTO payments (
          id, institution_id, student_id, amount_paise, currency_code, method,
@@ -232,33 +274,24 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
     ).bind(paymentId, instId, studentId, totalPaise, method, receiptNo, auth.membership.id, notes),
   ];
 
-  // Allocate funds to existing open charges
   let remainingPaise = totalPaise;
-  for (const chg of openCharges.results) {
+  for (const charge of openCharges.results) {
     if (remainingPaise <= 0) break;
-    const dueOnCharge = chg.amount_paise - chg.paid_paise;
+    const dueOnCharge = charge.amount_paise - charge.paid_paise;
     if (dueOnCharge <= 0) continue;
 
-    const allocPaise = Math.min(remainingPaise, dueOnCharge);
+    const allocationPaise = Math.min(remainingPaise, dueOnCharge);
     statements.push(
       DB.prepare(
         `INSERT INTO payment_allocations (institution_id, payment_id, charge_id, student_id, amount_paise)
          VALUES (?, ?, ?, ?, ?)`
-      ).bind(instId, paymentId, chg.id, studentId, allocPaise)
+      ).bind(instId, paymentId, charge.id, studentId, allocationPaise),
+      DB.prepare(`UPDATE fee_charges SET status = ? WHERE id = ? AND institution_id = ?`)
+        .bind(charge.paid_paise + allocationPaise >= charge.amount_paise ? 'paid' : 'partial', charge.id, instId),
     );
-
-    const newPaid = chg.paid_paise + allocPaise;
-    const newStatus = newPaid >= chg.amount_paise ? 'paid' : 'partial';
-    statements.push(
-      DB.prepare(
-        `UPDATE fee_charges SET status = ? WHERE id = ? AND institution_id = ?`
-      ).bind(newStatus, chg.id, instId)
-    );
-
-    remainingPaise -= allocPaise;
+    remainingPaise -= allocationPaise;
   }
 
-  // If there are no open charges or payment exceeds existing charges, create an on-the-spot fee charge for the balance
   if (remainingPaise > 0) {
     const extraChargeId = `chg-${crypto.randomUUID().slice(0, 8)}`;
     statements.push(
@@ -269,29 +302,37 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
       DB.prepare(
         `INSERT INTO payment_allocations (institution_id, payment_id, charge_id, student_id, amount_paise)
          VALUES (?, ?, ?, ?, ?)`
-      ).bind(instId, paymentId, extraChargeId, studentId, remainingPaise)
+      ).bind(instId, paymentId, extraChargeId, studentId, remainingPaise),
     );
   }
 
   try {
+    // D1 batch is transactional: the payment, allocations, charge updates, audit trigger,
+    // and final replay response commit together or are all rolled back.
     await DB.batch(statements);
   } catch (err) {
+    // A concurrent duplicate may have won the unique idempotency-key insert. Replay it
+    // only after verifying both the authenticated actor and the original payload hash.
+    const winner = await DB.prepare(
+      `SELECT endpoint, actor_membership_id, request_hash, status_code, response_body
+       FROM idempotency_keys WHERE institution_id = ? AND idempotency_key = ?`
+    ).bind(instId, scopedKey).first<{
+      endpoint: string;
+      actor_membership_id: string | null;
+      request_hash: string | null;
+      status_code: number | null;
+      response_body: string | null;
+    }>().catch(() => null);
+    if (winner) {
+      if (winner.endpoint !== endpoint || winner.actor_membership_id !== auth.membership.id || winner.request_hash !== requestHash) {
+        return c.json({ error: 'Idempotency key was already used for a different payment request' }, 409);
+      }
+      if (winner.status_code && winner.response_body) {
+        return c.json(JSON.parse(winner.response_body), winner.status_code as any);
+      }
+    }
     console.error('Record payment error:', err);
     return c.json({ error: 'Failed to record payment' }, 500);
-  }
-
-  const studentName = `${student.first_name} ${student.last_name || ''}`.trim();
-  const responseBody = {
-    success: true,
-    message: 'Payment recorded and allocated successfully',
-    paymentId,
-    receiptNo,
-    amount: amountRupees,
-    studentName,
-  };
-
-  if (idempotencyKey) {
-    await saveIdempotentResponse(DB, instId, idempotencyKey, '/fees/payments', 201, responseBody);
   }
 
   return c.json(responseBody, 201);

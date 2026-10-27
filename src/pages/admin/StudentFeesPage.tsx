@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   CreditCard,
   Search,
@@ -18,6 +18,7 @@ import {
   getStoredStudentFees,
   saveStoredStudentFees
 } from '../../utils/storage';
+import { runConfirmedFeePayment } from '../../utils/feePaymentSubmission';
 
 export const StudentFeesPage: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
@@ -41,14 +42,10 @@ export const StudentFeesPage: React.FC = () => {
   });
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState<string | null>(null);
+  const isSubmittingRef = useRef(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  // Sync state with storage
-  const updateRecordsAndPersist = (updated: FeeRecord[]) => {
-    setFeeRecords(updated);
-    saveStoredStudentFees(updated);
-  };
 
   const refreshFees = async () => {
     if (!activeInstitutionId) return;
@@ -105,6 +102,7 @@ export const StudentFeesPage: React.FC = () => {
   const partialCount = feeRecords.filter(r => r.paidAmount > 0 && (r.totalFees - r.paidAmount) > 0).length;
 
   const openPaymentModal = (rec: FeeRecord) => {
+    setPaymentIdempotencyKey(crypto.randomUUID());
     setActivePaymentRecord(rec);
     const remaining = rec.totalFees - rec.paidAmount;
     setPaymentError(null);
@@ -124,7 +122,7 @@ export const StudentFeesPage: React.FC = () => {
     const payAmount = Number(paymentForm.amount);
     const remaining = activePaymentRecord.totalFees - activePaymentRecord.paidAmount;
 
-    if (isNaN(payAmount) || payAmount <= 0) {
+    if (!Number.isFinite(payAmount) || payAmount <= 0) {
       setPaymentError('Payment amount must be greater than zero.');
       return;
     }
@@ -134,48 +132,41 @@ export const StudentFeesPage: React.FC = () => {
       return;
     }
 
-    if (isSubmitting) return;
+    if (isSubmittingRef.current) return;
+    if (!paymentIdempotencyKey || !activeInstitutionId) {
+      setPaymentError('A payment request could not be started. Close this form and open it again to retry.');
+      return;
+    }
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
+    setPaymentError(null);
 
     try {
-      const res = await api.fees.recordPayment(activeInstitutionId, {
-        studentId: activePaymentRecord.studentId,
-        amount: payAmount,
-        method: paymentForm.paymentMethod,
-        notes: paymentForm.remarks
-      });
-      await refreshFees();
-      setActivePaymentRecord(null);
-      showToast(`Recorded payment of ₹${payAmount.toLocaleString('en-IN')} for ${activePaymentRecord.studentName}! Receipt: ${res?.receiptNo || 'Issued'}`, 'success');
-      return;
-    } catch {
-      // Fallback to local state update if offline
+      await runConfirmedFeePayment(
+        () => api.fees.recordPayment(activeInstitutionId, {
+          studentId: activePaymentRecord.studentId,
+          amount: payAmount,
+          method: paymentForm.paymentMethod,
+          notes: paymentForm.remarks,
+          idempotencyKey: paymentIdempotencyKey,
+        }),
+        (response) => response.success === true && Boolean(response.paymentId && response.receiptNo),
+        async (response) => {
+          setActivePaymentRecord(null);
+          setPaymentIdempotencyKey(null);
+          showToast(`Recorded payment of ₹${response.amount.toLocaleString('en-IN')} for ${activePaymentRecord.studentName}! Receipt: ${response.receiptNo}`, 'success');
+          await refreshFees();
+        },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Payment request failed';
+      const errorMessage = `Payment was not confirmed. Your entries are preserved; retry with the same details to safely check the original request. ${message}`;
+      setPaymentError(errorMessage);
+      showToast('Payment was not confirmed. You can safely retry with the same details.', 'error');
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
-
-    const newPaid = activePaymentRecord.paidAmount + payAmount;
-    const newRemaining = activePaymentRecord.totalFees - newPaid;
-    const newStatus: 'Paid' | 'Pending' | 'Overdue' = newRemaining === 0 ? 'Paid' : 'Pending';
-
-    const updated = feeRecords.map(rec => {
-      if (rec.id === activePaymentRecord.id) {
-        return {
-          ...rec,
-          paidAmount: newPaid,
-          outstandingAmount: newRemaining,
-          status: newStatus,
-          paymentDate: paymentForm.paymentDate,
-          paymentMethod: paymentForm.paymentMethod,
-          receiptNo: paymentForm.receiptNo
-        };
-      }
-      return rec;
-    });
-
-    updateRecordsAndPersist(updated);
-    setActivePaymentRecord(null);
-    showToast(`Recorded payment of ₹${payAmount.toLocaleString('en-IN')} for ${activePaymentRecord.studentName}!`, 'success');
   };
 
   const handleExportCSV = () => {

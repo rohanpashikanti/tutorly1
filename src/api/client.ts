@@ -15,12 +15,66 @@ import {
   AcademicYear,
 } from '../types';
 
+let activeApiSessionScope: string | null = null;
+let apiSessionGeneration = 0;
+const pendingApiRequests = new Set<AbortController>();
+const responseSessionGenerations = new WeakMap<Response, number>();
+
+function staleSessionError(): Error {
+  const error = new Error('The authenticated session changed before this request completed.');
+  error.name = 'AbortError';
+  return error;
+}
+
+export function setApiSessionScope(scope: string | null): void {
+  if (activeApiSessionScope === scope) return;
+  activeApiSessionScope = scope;
+  apiSessionGeneration++;
+  for (const controller of pendingApiRequests) controller.abort();
+  pendingApiRequests.clear();
+}
+
+async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  if (!activeApiSessionScope && !requestUrl.includes('/api/session')) throw staleSessionError();
+  const generation = apiSessionGeneration;
+  const controller = new AbortController();
+  pendingApiRequests.add(controller);
+  try {
+    const response = await fetch(input, {
+      ...init,
+      credentials: init.credentials ?? 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (generation !== apiSessionGeneration) throw staleSessionError();
+    responseSessionGenerations.set(response, generation);
+    if (response.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('tutorly:session-expired'));
+    }
+    return response;
+  } catch (error) {
+    if (generation !== apiSessionGeneration) throw staleSessionError();
+    throw error;
+  } finally {
+    pendingApiRequests.delete(controller);
+  }
+}
+
+function assertResponseSessionCurrent(response: Response): void {
+  const generation = responseSessionGenerations.get(response);
+  if (generation !== undefined && generation !== apiSessionGeneration) throw staleSessionError();
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const errorJson = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    assertResponseSessionCurrent(res);
     throw new Error(errorJson.error || errorJson.message || `Request failed with status ${res.status}`);
   }
-  return (await res.json()) as T;
+  const body = (await res.json()) as T;
+  assertResponseSessionCurrent(res);
+  return body;
 }
 
 export function getJsonHeaders(data?: any): Record<string, string> {
@@ -37,12 +91,12 @@ export const api = {
   // Session & Tenants
   session: {
     async get() {
-      const res = await fetch('/api/session', { credentials: 'same-origin' });
+      const res = await apiFetch('/api/session', { credentials: 'same-origin' });
       if (!res.ok) return null;
       return await res.json();
     },
     async createInstitution(institutionName: string) {
-      const res = await fetch('/api/institutions', {
+      const res = await apiFetch('/api/institutions', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -55,11 +109,11 @@ export const api = {
   // Institution Settings
   settings: {
     async get(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/settings`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/settings`, { credentials: 'same-origin' });
       return handleResponse<{ settings: Record<string, any> }>(res);
     },
     async update(institutionId: string, settings: Record<string, any>) {
-      const res = await fetch(`/api/institutions/${institutionId}/settings`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/settings`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -72,7 +126,7 @@ export const api = {
   // Academics (Classes, Batches, Subjects)
   academics: {
     async getOverview(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/academics/overview`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/academics/overview`, { credentials: 'same-origin' });
       return handleResponse<{
         classes: ClassItem[];
         batches: BatchItem[];
@@ -81,7 +135,7 @@ export const api = {
       }>(res);
     },
     async createClass(institutionId: string, data: { name: string; code?: string; idempotencyKey?: string }) {
-      const res = await fetch(`/api/institutions/${institutionId}/classes`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/classes`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -93,7 +147,7 @@ export const api = {
       institutionId: string,
       data: { className?: string; classId?: string; name: string; timing?: string; days?: string[]; idempotencyKey?: string }
     ) {
-      const res = await fetch(`/api/institutions/${institutionId}/batches`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/batches`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -105,7 +159,7 @@ export const api = {
       institutionId: string,
       data: { name: string; code?: string; isCore?: boolean; color?: string; idempotencyKey?: string }
     ) {
-      const res = await fetch(`/api/institutions/${institutionId}/subjects`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/subjects`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -114,11 +168,11 @@ export const api = {
       return handleResponse<{ success: boolean; id: string; name: string }>(res);
     },
     async listAcademicYears(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/academic-years`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/academic-years`, { credentials: 'same-origin' });
       return handleResponse<{ academicYears: AcademicYear[] }>(res);
     },
     async createAcademicYear(institutionId: string, data: { name: string; startsOn: string; endsOn: string; status?: string; idempotencyKey?: string }) {
-      const res = await fetch(`/api/institutions/${institutionId}/academic-years`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/academic-years`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -127,7 +181,7 @@ export const api = {
       return handleResponse<{ success: boolean; academicYear: AcademicYear }>(res);
     },
     async updateAcademicYear(institutionId: string, id: string, data: { name?: string; startsOn?: string; endsOn?: string; status?: string }) {
-      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/academic-years/${id}`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -136,21 +190,21 @@ export const api = {
       return handleResponse<{ success: boolean; academicYear: AcademicYear }>(res);
     },
     async activateAcademicYear(institutionId: string, id: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}/activate`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/academic-years/${id}/activate`, {
         method: 'PUT',
         credentials: 'same-origin',
       });
       return handleResponse<{ success: boolean; activeId: string }>(res);
     },
     async archiveAcademicYear(institutionId: string, id: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}/archive`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/academic-years/${id}/archive`, {
         method: 'PUT',
         credentials: 'same-origin',
       });
       return handleResponse<{ success: boolean; archivedId: string }>(res);
     },
     async deleteAcademicYear(institutionId: string, id: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/academic-years/${id}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/academic-years/${id}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -161,11 +215,11 @@ export const api = {
   // Teachers
   teachers: {
     async list(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/teachers`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/teachers`, { credentials: 'same-origin' });
       return handleResponse<{ teachers: Teacher[] }>(res);
     },
     async create(institutionId: string, data: any) {
-      const res = await fetch(`/api/institutions/${institutionId}/teachers`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/teachers`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -174,7 +228,7 @@ export const api = {
       return handleResponse<{ success: boolean; teacherId: string }>(res);
     },
     async update(institutionId: string, teacherId: string, data: any) {
-      const res = await fetch(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -183,7 +237,7 @@ export const api = {
       return handleResponse<{ success: boolean }>(res);
     },
     async delete(institutionId: string, teacherId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/teachers/${teacherId}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -195,26 +249,44 @@ export const api = {
   students: {
     async list(
       institutionId: string,
-      filters?: { search?: string; class?: string; batch?: string; status?: string }
+      filters?: { search?: string; class?: string; batch?: string; status?: string; page?: number; limit?: number }
     ) {
       const params = new URLSearchParams();
+      params.set('page', String(filters?.page ?? 1));
+      params.set('limit', String(filters?.limit ?? 25));
       if (filters?.search) params.set('search', filters.search);
       if (filters?.class) params.set('class', filters.class);
       if (filters?.batch) params.set('batch', filters.batch);
       if (filters?.status) params.set('status', filters.status);
-      const res = await fetch(`/api/institutions/${institutionId}/students?${params.toString()}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/students?${params.toString()}`, {
         credentials: 'same-origin',
       });
-      return handleResponse<{ students: Student[]; total: number }>(res);
+      return handleResponse<{
+        students: Student[];
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+        summary: { total: number; active: number; inactive: number; classes: number };
+      }>(res);
+    },
+    async listAll(institutionId: string, filters?: { search?: string; class?: string; batch?: string; status?: string }) {
+      const firstPage = await api.students.list(institutionId, { ...filters, page: 1, limit: 100 });
+      const students = [...firstPage.students];
+      for (let currentPage = 2; currentPage <= firstPage.totalPages; currentPage += 1) {
+        const result = await api.students.list(institutionId, { ...filters, page: currentPage, limit: 100 });
+        students.push(...result.students);
+      }
+      return students;
     },
     async get(institutionId: string, studentId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/students/${studentId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/students/${studentId}`, {
         credentials: 'same-origin',
       });
       return handleResponse<{ student: any }>(res);
     },
     async create(institutionId: string, data: any) {
-      const res = await fetch(`/api/institutions/${institutionId}/students`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/students`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -223,7 +295,7 @@ export const api = {
       return handleResponse<{ success: boolean; studentId: string; admissionNo: string }>(res);
     },
     async update(institutionId: string, studentId: string, data: Partial<Student> & { fatherName?: string }) {
-      const res = await fetch(`/api/institutions/${institutionId}/students/${studentId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/students/${studentId}`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -232,7 +304,7 @@ export const api = {
       return handleResponse<{ success: boolean }>(res);
     },
     async delete(institutionId: string, studentId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/students/${studentId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/students/${studentId}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -250,7 +322,7 @@ export const api = {
       if (params.date) q.set('date', params.date);
       if (params.class) q.set('class', params.class);
       if (params.batch) q.set('batch', params.batch);
-      const res = await fetch(`/api/institutions/${institutionId}/attendance/register?${q.toString()}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/attendance/register?${q.toString()}`, {
         credentials: 'same-origin',
       });
       return handleResponse<{
@@ -263,7 +335,7 @@ export const api = {
       institutionId: string,
       data: { date: string; class: string; batch: string; records: any[]; idempotencyKey?: string }
     ) {
-      const res = await fetch(`/api/institutions/${institutionId}/attendance/submit`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/attendance/submit`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -272,7 +344,7 @@ export const api = {
       return handleResponse<{ success: boolean; sessionId: string }>(res);
     },
     async getReports(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/attendance/reports`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/attendance/reports`, {
         credentials: 'same-origin',
       });
       return handleResponse<any>(res);
@@ -282,19 +354,19 @@ export const api = {
   // Assessments (Exams & Tests)
   assessments: {
     async listExams(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/assessments?type=school_exam`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/assessments?type=school_exam`, {
         credentials: 'same-origin',
       });
       return handleResponse<{ exams: Exam[] }>(res);
     },
     async listTests(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/assessments?type=tuition_test`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/assessments?type=tuition_test`, {
         credentials: 'same-origin',
       });
       return handleResponse<{ tests: TuitionTest[] }>(res);
     },
     async create(institutionId: string, data: any) {
-      const res = await fetch(`/api/institutions/${institutionId}/assessments`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/assessments`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
@@ -303,13 +375,17 @@ export const api = {
       return handleResponse<{ success: boolean; assessmentId: string }>(res);
     },
     async getMarks(institutionId: string, assessmentId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/assessments/${assessmentId}/marks`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/assessments/${assessmentId}/marks`, {
         credentials: 'same-origin',
       });
       return handleResponse<{ assessment: any; marks: StudentMarks[] }>(res);
     },
-    async saveMarks(institutionId: string, assessmentId: string, marks: any[]) {
-      const res = await fetch(`/api/institutions/${institutionId}/assessments/${assessmentId}/marks`, {
+    async saveMarks(
+      institutionId: string,
+      assessmentId: string,
+      marks: Array<{ studentId: string; enrollmentId?: string; marks?: number | null; remarks?: string | null }>
+    ) {
+      const res = await apiFetch(`/api/institutions/${institutionId}/assessments/${assessmentId}/marks`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -318,7 +394,7 @@ export const api = {
       return handleResponse<{ success: boolean }>(res);
     },
     async delete(institutionId: string, assessmentId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/assessments/${assessmentId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/assessments/${assessmentId}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -329,37 +405,41 @@ export const api = {
   // Fees & Payments
   fees: {
     async getPlans(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/fees/plans`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/plans`, { credentials: 'same-origin' });
       return handleResponse<{ plans: FeePlan[] }>(res);
     },
     async getRecords(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/fees/records`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/records`, { credentials: 'same-origin' });
       return handleResponse<{ records: FeeRecord[] }>(res);
     },
     async recordPayment(
       institutionId: string,
-      data: { studentId: string; amount: number; method: string; notes?: string; idempotencyKey?: string }
+      data: { studentId: string; amount: number; method: string; notes?: string; idempotencyKey: string }
     ) {
-      const res = await fetch(`/api/institutions/${institutionId}/fees/payments`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/payments`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: getJsonHeaders(data),
         body: JSON.stringify(data),
       });
-      return handleResponse<{
+      const result = await handleResponse<{
         success: boolean;
         paymentId: string;
         receiptNo: string;
         amount: number;
         studentName: string;
       }>(res);
+      if (!result.success || !result.paymentId || !result.receiptNo) {
+        throw new Error('The server did not confirm that the payment was recorded.');
+      }
+      return result;
     },
     async getPayments(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/fees/payments`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/payments`, { credentials: 'same-origin' });
       return handleResponse<{ payments: any[] }>(res);
     },
     async getReports(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/fees/reports`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/reports`, { credentials: 'same-origin' });
       return handleResponse<any>(res);
     },
   },
@@ -367,11 +447,11 @@ export const api = {
   // Calendar
   calendar: {
     async list(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/calendar/events`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/calendar/events`, { credentials: 'same-origin' });
       return handleResponse<{ events: CalendarEvent[] }>(res);
     },
     async create(institutionId: string, data: Partial<CalendarEvent>) {
-      const res = await fetch(`/api/institutions/${institutionId}/calendar/events`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/calendar/events`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -380,7 +460,7 @@ export const api = {
       return handleResponse<{ success: boolean; eventId: string }>(res);
     },
     async delete(institutionId: string, eventId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/calendar/events/${eventId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/calendar/events/${eventId}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -391,11 +471,11 @@ export const api = {
   // Announcements
   announcements: {
     async list(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/announcements`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/announcements`, { credentials: 'same-origin' });
       return handleResponse<{ announcements: Announcement[] }>(res);
     },
     async create(institutionId: string, data: Partial<Announcement>) {
-      const res = await fetch(`/api/institutions/${institutionId}/announcements`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/announcements`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -404,7 +484,7 @@ export const api = {
       return handleResponse<{ success: boolean; announcementId: string }>(res);
     },
     async delete(institutionId: string, announcementId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/announcements/${announcementId}`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/announcements/${announcementId}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -415,7 +495,7 @@ export const api = {
   // Users & Permissions
   users: {
     async list(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/users`, { credentials: 'same-origin' });
+      const res = await apiFetch(`/api/institutions/${institutionId}/users`, { credentials: 'same-origin' });
       return handleResponse<{ users: any[] }>(res);
     },
     async create(
@@ -433,7 +513,7 @@ export const api = {
         relationship?: string;
       }
     ) {
-      const res = await fetch(`/api/institutions/${institutionId}/users`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/users`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -447,7 +527,7 @@ export const api = {
       }>(res);
     },
     async updateStatus(institutionId: string, membershipId: string, status: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/users/${membershipId}/status`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/users/${membershipId}/status`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -456,14 +536,14 @@ export const api = {
       return handleResponse<{ success: boolean; status: string }>(res);
     },
     async resetPassword(institutionId: string, membershipId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/users/${membershipId}/reset-password`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/users/${membershipId}/reset-password`, {
         method: 'POST',
         credentials: 'same-origin',
       });
       return handleResponse<{ success: boolean; temporaryPassword: string; message: string }>(res);
     },
     async resendInvite(institutionId: string, membershipId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/users/${membershipId}/resend-invite`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/users/${membershipId}/resend-invite`, {
         method: 'POST',
         credentials: 'same-origin',
       });
@@ -474,7 +554,7 @@ export const api = {
   // Dashboard & Analytics
   dashboard: {
     async getSummary(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/dashboard/summary`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/dashboard/summary`, {
         credentials: 'same-origin',
       });
       return handleResponse<{
@@ -497,13 +577,13 @@ export const api = {
   // Portals
   portals: {
     async getParent(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/parent/portal`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/parent/portal`, {
         credentials: 'same-origin',
       });
       return handleResponse<{ guardian: any; children: any[] }>(res);
     },
     async getChildFees(institutionId: string, studentId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/parent/children/${studentId}/fees`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/parent/children/${studentId}/fees`, {
         credentials: 'same-origin',
       });
       return handleResponse<{
@@ -519,7 +599,7 @@ export const api = {
       }>(res);
     },
     async getChildAttendance(institutionId: string, studentId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/parent/children/${studentId}/attendance`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/parent/children/${studentId}/attendance`, {
         credentials: 'same-origin',
       });
       return handleResponse<{
@@ -533,7 +613,7 @@ export const api = {
       }>(res);
     },
     async getTeacher(institutionId: string) {
-      const res = await fetch(`/api/institutions/${institutionId}/teacher/portal`, {
+      const res = await apiFetch(`/api/institutions/${institutionId}/teacher/portal`, {
         credentials: 'same-origin',
       });
       return handleResponse<{

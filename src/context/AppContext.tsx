@@ -1,7 +1,13 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import { createAuthClient } from 'better-auth/react';
 import { User, UserRole, Student } from '../types';
-import { getStoredStudents } from '../utils/storage';
+import { api, setApiSessionScope } from '../api/client';
+import {
+  activateVerifiedStorageScope,
+  clearAllStoredBusinessData,
+  clearLegacyStoredBusinessData,
+  getStoredStudents,
+} from '../utils/storage';
 
 export interface ToastAction {
   label: string;
@@ -62,14 +68,17 @@ interface AppContextType {
 
 const authClient = createAuthClient({ baseURL: window.location.origin, basePath: '/api/auth' });
 const AppContext = createContext<AppContextType | undefined>(undefined);
+const SESSION_BOUNDARY_CHANNEL = 'tutorly-session-boundary';
 
-async function readApiError(response: Response) {
-  const payload = await response.json().catch(() => ({})) as { error?: string; message?: string };
-  return payload.error || payload.message || 'The request could not be completed.';
+function broadcastSessionBoundary(): void {
+  if (typeof BroadcastChannel === 'undefined') return;
+  const channel = new BroadcastChannel(SESSION_BOUNDARY_CHANNEL);
+  channel.postMessage('session-changing');
+  channel.close();
 }
 
 async function requestSession(): Promise<AuthSession | null> {
-  const response = await fetch('/api/session', { credentials: 'same-origin' });
+  const response = await fetch('/api/session', { credentials: 'same-origin', cache: 'no-store' });
   if (!response.ok) return null;
   return await response.json() as AuthSession;
 }
@@ -109,63 +118,96 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const transitionGeneration = useRef(0);
 
-  const restoreSession = useCallback(async (showLoading = true) => {
-    if (showLoading) setIsAuthLoading(true);
+  const clearTransientPrivateState = useCallback(() => {
+    setSelectedChildId('');
+    setSelectedStudentId(null);
+    setSelectedBatchId('');
+    setInstitutionNameOverride('');
+  }, []);
+
+  const beginSessionTransition = useCallback((clearPrivateCache: boolean) => {
+    const generation = ++transitionGeneration.current;
+    setIsAuthLoading(true);
+    setSession(null);
+    setActiveInstitutionId('');
+    clearTransientPrivateState();
+    activateVerifiedStorageScope(null);
+    setApiSessionScope(null);
+    if (clearPrivateCache) clearAllStoredBusinessData();
+    return generation;
+  }, [clearTransientPrivateState]);
+
+  const setActiveInstitution = useCallback((institutionId: string) => {
+    const membership = session?.memberships.find((item) => item.institutionId === institutionId);
+    if (!membership || institutionId === activeInstitutionId || !session) return;
+    const scope = { userId: session.user.id, institutionId, role: membership.role };
+    const scopeToken = activateVerifiedStorageScope(scope);
+    setApiSessionScope(scopeToken);
+    setActiveInstitutionId(institutionId);
+    clearTransientPrivateState();
+    setCurrentRoute(membership.role === 'teacher' ? 'teacher-dashboard' : membership.role === 'parent' ? 'parent-dashboard' : 'admin-dashboard');
+  }, [activeInstitutionId, clearTransientPrivateState, session]);
+
+  const restoreSession = useCallback(async (preferredInstitutionId?: string, clearPrivateCache = false, initialLoad = false) => {
+    const generation = initialLoad ? ++transitionGeneration.current : beginSessionTransition(clearPrivateCache);
     try {
       const payload = await requestSession();
+      if (generation !== transitionGeneration.current) return;
       if (!payload) {
+        clearAllStoredBusinessData();
         setSession(null);
+        setCurrentRoute('login');
         return;
       }
+      const membership = payload.memberships.find((item) => item.institutionId === preferredInstitutionId)
+        || payload.memberships[0];
+      const nextId = membership?.institutionId || '';
+      const scopeToken = membership
+        ? activateVerifiedStorageScope({ userId: payload.user.id, institutionId: nextId, role: membership.role })
+        : null;
+      setApiSessionScope(scopeToken);
       setSession(payload);
-      setActiveInstitutionId((existing) => {
-        const nextId = payload.memberships.some((membership) => membership.institutionId === existing)
-          ? existing
-          : payload.memberships[0]?.institutionId || '';
-        const activeRole = payload.memberships.find((m) => m.institutionId === nextId)?.role;
-        const defaultRoute = !payload.memberships.length
-          ? 'onboarding'
-          : activeRole === 'teacher'
-          ? 'teacher-dashboard'
-          : activeRole === 'parent'
-          ? 'parent-dashboard'
-          : 'admin-dashboard';
-        setCurrentRoute(defaultRoute);
-        return nextId;
-      });
+      setActiveInstitutionId(nextId);
+      setCurrentRoute(!membership ? 'onboarding' : membership.role === 'teacher' ? 'teacher-dashboard' : membership.role === 'parent' ? 'parent-dashboard' : 'admin-dashboard');
     } catch {
+      if (generation !== transitionGeneration.current) return;
+      clearAllStoredBusinessData();
       setSession(null);
+      setCurrentRoute('login');
     } finally {
-      setIsAuthLoading(false);
+      if (generation === transitionGeneration.current) setIsAuthLoading(false);
     }
-  }, []);
+  }, [beginSessionTransition]);
 
   useEffect(() => {
-    let cancelled = false;
-    void requestSession().then((payload) => {
-      if (cancelled) return;
-      setSession(payload);
-      const nextInstId = payload?.memberships[0]?.institutionId || '';
-      setActiveInstitutionId(nextInstId);
-      const activeRole = payload?.memberships.find((m) => m.institutionId === nextInstId)?.role;
-      const defaultRoute = !payload
-        ? 'login'
-        : !payload.memberships.length
-        ? 'onboarding'
-        : activeRole === 'teacher'
-        ? 'teacher-dashboard'
-        : activeRole === 'parent'
-        ? 'parent-dashboard'
-        : 'admin-dashboard';
-      setCurrentRoute(defaultRoute);
-    }).catch(() => {
-      if (!cancelled) setSession(null);
-    }).finally(() => {
-      if (!cancelled) setIsAuthLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, []);
+    clearLegacyStoredBusinessData();
+    void restoreSession(undefined, false, true);
+    const generationRef = transitionGeneration;
+    return () => { generationRef.current++; };
+  }, [restoreSession]);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      broadcastSessionBoundary();
+      void restoreSession();
+    };
+    window.addEventListener('tutorly:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('tutorly:session-expired', handleSessionExpired);
+  }, [restoreSession]);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(SESSION_BOUNDARY_CHANNEL);
+    channel.onmessage = (event: MessageEvent) => {
+      if (event.data !== 'session-changing') return;
+      beginSessionTransition(true);
+      setCurrentRoute('login');
+      setIsAuthLoading(false);
+    };
+    return () => channel.close();
+  }, [beginSessionTransition]);
 
   const activeMembership = session?.memberships.find((membership) => membership.institutionId === activeInstitutionId);
   const role: UserRole = activeMembership?.role === 'teacher' ? 'teacher' : activeMembership?.role === 'parent' ? 'parent' : 'admin';
@@ -192,38 +234,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const dismissToast = (id: string) => setToasts((prev) => prev.filter((toast) => toast.id !== id));
 
   const login = async (email: string, password: string) => {
-    const result = await authClient.signIn.email({ email, password });
-    if (result.error) throw new Error(result.error.message || 'Email or password was not accepted.');
-    await restoreSession();
-    showToast('Signed in successfully.', 'success');
+    broadcastSessionBoundary();
+    beginSessionTransition(true);
+    try {
+      const result = await authClient.signIn.email({ email, password });
+      if (result.error) throw new Error(result.error.message || 'Email or password was not accepted.');
+      await restoreSession();
+      showToast('Signed in successfully.', 'success');
+    } catch (error) {
+      setIsAuthLoading(false);
+      throw error;
+    }
   };
 
   const register = async (name: string, email: string, password: string) => {
-    const result = await authClient.signUp.email({ name, email, password });
-    if (result.error) throw new Error(result.error.message || 'Account creation failed.');
-    await restoreSession();
+    broadcastSessionBoundary();
+    beginSessionTransition(true);
+    try {
+      const result = await authClient.signUp.email({ name, email, password });
+      if (result.error) throw new Error(result.error.message || 'Account creation failed.');
+      await restoreSession();
+    } catch (error) {
+      setIsAuthLoading(false);
+      throw error;
+    }
   };
 
   const createInstitution = async (name: string) => {
-    const response = await fetch('/api/institutions', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ institutionName: name }),
-    });
-    if (!response.ok) throw new Error(await readApiError(response));
-    const created = await response.json() as { institutionId: string };
-    await restoreSession();
-    setActiveInstitutionId(created.institutionId);
-    setCurrentRoute('admin-dashboard');
+    const created = await api.session.createInstitution(name);
+    await restoreSession(created.institutionId);
   };
 
   const logout = async () => {
-    await authClient.signOut();
-    setSession(null);
-    setActiveInstitutionId('');
+    broadcastSessionBoundary();
+    beginSessionTransition(true);
     setCurrentRoute('login');
-    showToast('You have been logged out.', 'info');
+    try {
+      await authClient.signOut();
+    } finally {
+      setIsAuthLoading(false);
+      showToast('You have been logged out.', 'info');
+    }
   };
 
   const navigateTo = (route: string, params?: { studentId?: string; batchId?: string }) => {
@@ -240,7 +291,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     <AppContext.Provider value={{
       currentUser, role, isLoggedIn: Boolean(session), isAuthLoading,
       memberships: session?.memberships || [], activeInstitutionId,
-      setActiveInstitutionId, hasMembership: Boolean(activeMembership),
+      setActiveInstitutionId: setActiveInstitution, hasMembership: Boolean(activeMembership),
       login, register, createInstitution, logout, currentRoute, navigateTo,
       academicYear, setAcademicYear, institutionName,
       setInstitutionName: setInstitutionNameOverride,

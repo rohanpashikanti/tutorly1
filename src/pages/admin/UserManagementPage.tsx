@@ -19,6 +19,8 @@ import { useApp } from '../../context/AppContext';
 import { downloadCSV } from '../../utils/demoActions';
 import { api } from '../../api/client';
 
+const STUDENT_PICKER_PAGE_SIZE = 20;
+
 interface UserRecord {
   id: string;
   membershipId: string;
@@ -74,6 +76,12 @@ export const UserManagementPage: React.FC = () => {
   const [academicBatches, setAcademicBatches] = useState<any[]>([]);
   const [academicSubjects, setAcademicSubjects] = useState<any[]>([]);
   const [availableStudents, setAvailableStudents] = useState<any[]>([]);
+  const [availableStudentsTotal, setAvailableStudentsTotal] = useState(0);
+  const [studentPickerPage, setStudentPickerPage] = useState(1);
+  const [studentSearchInput, setStudentSearchInput] = useState('');
+  const [studentSearch, setStudentSearch] = useState('');
+  const [isLoadingStudentOptions, setIsLoadingStudentOptions] = useState(false);
+  const studentOptionsRequest = React.useRef(0);
 
   // Credential Display Modal (for created or reset passwords)
   const [credentialModal, setCredentialModal] = useState<{
@@ -103,10 +111,7 @@ export const UserManagementPage: React.FC = () => {
 
   const loadDependencies = async () => {
     try {
-      const [academics, studentsRes] = await Promise.all([
-        api.academics.getOverview(activeInstitutionId).catch(() => null),
-        api.students.list(activeInstitutionId).catch(() => null),
-      ]);
+      const academics = await api.academics.getOverview(activeInstitutionId).catch(() => null);
 
       if (academics) {
         setAcademicClasses(academics.classes || []);
@@ -119,10 +124,6 @@ export const UserManagementPage: React.FC = () => {
           setSelectedSubjectId(academics.subjects[0].id);
         }
       }
-
-      if (studentsRes && studentsRes.students) {
-        setAvailableStudents(studentsRes.students);
-      }
     } catch {
       // Ignore dependencies load failure
     }
@@ -134,6 +135,48 @@ export const UserManagementPage: React.FC = () => {
       void loadDependencies();
     }
   }, [activeInstitutionId]);
+
+  useEffect(() => {
+    const requestId = ++studentOptionsRequest.current;
+    if (!activeInstitutionId || newUserRole !== 'Parent') {
+      setAvailableStudents([]);
+      setAvailableStudentsTotal(0);
+      setIsLoadingStudentOptions(false);
+      return;
+    }
+    setAvailableStudents([]);
+    setIsLoadingStudentOptions(true);
+    api.students.list(activeInstitutionId, {
+      page: studentPickerPage,
+      limit: STUDENT_PICKER_PAGE_SIZE,
+      search: studentSearch,
+    }).then((result) => {
+      if (requestId !== studentOptionsRequest.current) return;
+      if (result.totalPages > 0 && studentPickerPage > result.totalPages) {
+        setStudentPickerPage(result.totalPages);
+        return;
+      }
+      setAvailableStudents(result.students);
+      setAvailableStudentsTotal(result.total);
+    }).catch(() => {
+      if (requestId !== studentOptionsRequest.current) return;
+      setAvailableStudents([]);
+      setAvailableStudentsTotal(0);
+    }).finally(() => {
+      if (requestId === studentOptionsRequest.current) setIsLoadingStudentOptions(false);
+    });
+    return () => {
+      studentOptionsRequest.current += 1;
+    };
+  }, [activeInstitutionId, newUserRole, studentPickerPage, studentSearch]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setStudentSearch(studentSearchInput.trim());
+      setStudentPickerPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [studentSearchInput]);
 
   // Filtered users
   const filteredUsers = users.filter((u) => {
@@ -705,7 +748,17 @@ export const UserManagementPage: React.FC = () => {
                       <label style={{ fontSize: '11.5px', color: '#475569', display: 'block', marginBottom: '4px' }}>
                         Select Enrolled Children:
                       </label>
-                      {availableStudents.length === 0 ? (
+                      <input
+                        type="search"
+                        value={studentSearchInput}
+                        onChange={(event) => setStudentSearchInput(event.target.value)}
+                        placeholder="Search enrolled students"
+                        aria-label="Search enrolled students"
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px', marginBottom: '6px', border: '1px solid #CBD5E1', borderRadius: '6px' }}
+                      />
+                      {isLoadingStudentOptions ? (
+                        <div role="status" style={{ fontSize: '12px', color: '#64748B' }}>Loading students…</div>
+                      ) : availableStudentsTotal === 0 ? (
                         <div style={{ fontSize: '12px', color: '#64748B', fontStyle: 'italic' }}>No students enrolled in this center yet.</div>
                       ) : (
                         <div style={{ maxHeight: '120px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '6px', padding: '6px 8px', background: '#FFFFFF' }}>
@@ -724,6 +777,13 @@ export const UserManagementPage: React.FC = () => {
                           ))}
                         </div>
                       )}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', fontSize: '11px', color: '#64748B' }}>
+                        <span>{availableStudentsTotal === 0 ? '0 students' : `${(studentPickerPage - 1) * STUDENT_PICKER_PAGE_SIZE + 1}-${Math.min(studentPickerPage * STUDENT_PICKER_PAGE_SIZE, availableStudentsTotal)} of ${availableStudentsTotal}`}</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button type="button" className="btn btn-sm btn-secondary" disabled={isLoadingStudentOptions || studentPickerPage <= 1} onClick={() => setStudentPickerPage((current) => current - 1)}>Previous</button>
+                          <button type="button" className="btn btn-sm btn-secondary" disabled={isLoadingStudentOptions || studentPickerPage >= Math.ceil(availableStudentsTotal / STUDENT_PICKER_PAGE_SIZE)} onClick={() => setStudentPickerPage((current) => current + 1)}>Next</button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}

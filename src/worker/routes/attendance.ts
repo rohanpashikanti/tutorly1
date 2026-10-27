@@ -10,6 +10,18 @@ import {
 
 export const attendanceRouter = new Hono<{ Bindings: Env }>();
 
+// Six fixed enrollment-query bindings plus this chunk remain below D1's 100-bind limit.
+export const ATTENDANCE_ENROLLMENT_QUERY_CHUNK_SIZE = 90;
+
+export function chunkAttendanceStudentIds(ids: string[], chunkSize = ATTENDANCE_ENROLLMENT_QUERY_CHUNK_SIZE): string[][] {
+  if (!Number.isInteger(chunkSize) || chunkSize <= 0) throw new Error('Attendance ID chunk size must be a positive integer');
+  const chunks: string[][] = [];
+  for (let offset = 0; offset < ids.length; offset += chunkSize) {
+    chunks.push(ids.slice(offset, offset + chunkSize));
+  }
+  return chunks;
+}
+
 attendanceRouter.get('/:institutionId/attendance/register', async (c) => {
   const auth = await authenticateInstitution(c);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
@@ -133,66 +145,86 @@ attendanceRouter.post('/:institutionId/attendance/submit', async (c) => {
   const body = await readJson(c);
   if (!body) return c.json({ error: 'Request body required' }, 400);
 
-  const dateStr = typeof body.date === 'string' ? body.date.trim() : new Date().toISOString().slice(0, 10);
-  const className = typeof body.class === 'string' ? body.class.trim() : 'Class 10';
-  const batchName = typeof body.batch === 'string' ? body.batch.trim() : 'Batch A';
+  const dateStr = typeof body.date === 'string' ? body.date.trim() : '';
+  const className = typeof body.class === 'string' ? body.class.trim() : '';
+  const batchName = typeof body.batch === 'string' ? body.batch.trim() : '';
   const records = Array.isArray(body.records) ? body.records : [];
+  const forbidden = () => c.json({ error: 'You are not authorized to record attendance for this class or student' }, 403);
+  const badRequest = () => c.json({ error: 'Invalid attendance request' }, 400);
 
-  if (records.length === 0) return c.json({ error: 'No attendance records provided' }, 400);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !Number.isFinite(Date.parse(`${dateStr}T00:00:00Z`)) || new Date(`${dateStr}T00:00:00Z`).toISOString().slice(0, 10) !== dateStr) return badRequest();
+  if (!className || !batchName || records.length === 0 || records.length > 500) return badRequest();
+  const normalizedRecords: Array<{ studentId: string; enrollmentId?: string; status: string; remarks: string | null }> = [];
+  const studentIds = new Set<string>();
+  for (const value of records) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return badRequest();
+    const item = value as Record<string, unknown>;
+    if (typeof item.studentId !== 'string' || !item.studentId.trim() || studentIds.has(item.studentId.trim())) return badRequest();
+    if (item.enrollmentId !== undefined && (typeof item.enrollmentId !== 'string' || !item.enrollmentId.trim())) return badRequest();
+    if (!['Present', 'Absent', 'Late', 'Excused'].includes(String(item.status))) return badRequest();
+    if (item.remarks !== undefined && item.remarks !== null && typeof item.remarks !== 'string') return badRequest();
+    const studentId = item.studentId.trim();
+    studentIds.add(studentId);
+    normalizedRecords.push({
+      studentId,
+      enrollmentId: typeof item.enrollmentId === 'string' ? item.enrollmentId.trim() : undefined,
+      status: String(item.status),
+      remarks: typeof item.remarks === 'string' && item.remarks.trim() ? item.remarks.trim() : null,
+    });
+  }
 
   const { DB } = c.env;
   const instId = auth.institutionId;
 
+  // Resolve tenant-owned academic entities and validate the whole request before writing.
+  const year = await DB.prepare(
+    `SELECT id, starts_on, ends_on FROM academic_years WHERE institution_id = ? AND status = 'active' AND starts_on <= ? AND ends_on >= ?`
+  ).bind(instId, dateStr, dateStr).first<{ id: string; starts_on: string; ends_on: string }>();
+  const classRec = await DB.prepare(
+    `SELECT id FROM classes WHERE institution_id = ? AND name = ? AND deleted_at IS NULL AND status = 'active'`
+  ).bind(instId, className).first<{ id: string }>();
+  const batchRec = classRec ? await DB.prepare(
+    `SELECT id FROM batches WHERE institution_id = ? AND class_id = ? AND name = ? AND status = 'active'`
+  ).bind(instId, classRec.id, batchName).first<{ id: string }>() : null;
+  if (!year || !classRec || !batchRec) return auth.membership.role === 'teacher' ? forbidden() : badRequest();
+
+  if (auth.membership.role === 'teacher') {
+    const assigned = await DB.prepare(
+      `SELECT 1 AS allowed
+       FROM teachers t
+       JOIN teacher_assignments ta ON ta.institution_id = t.institution_id AND ta.teacher_id = t.id
+       WHERE t.institution_id = ? AND t.membership_id = ? AND t.status = 'active'
+         AND ta.academic_year_id = ? AND ta.class_id = ?
+         AND (ta.batch_id IS NULL OR ta.batch_id = ?)
+         AND ta.status = 'active' AND ta.starts_on <= ? AND (ta.ends_on IS NULL OR ta.ends_on >= ?)
+       LIMIT 1`
+    ).bind(instId, auth.membership.id, year.id, classRec.id, batchRec.id, dateStr, dateStr).first<{ allowed: number }>();
+    if (!assigned) return forbidden();
+  }
+
+  const ids = [...studentIds];
+  const enrollmentChunks = await Promise.all(
+    chunkAttendanceStudentIds(ids).map((chunk) => {
+      const placeholders = chunk.map(() => '?').join(', ');
+      return DB.prepare(
+        `SELECT e.id AS enrollment_id, e.student_id
+         FROM enrollments e
+         JOIN students s ON s.institution_id = e.institution_id AND s.id = e.student_id
+         WHERE e.institution_id = ? AND e.academic_year_id = ? AND e.class_id = ? AND e.batch_id = ?
+           AND e.status = 'active' AND e.starts_on <= ? AND (e.ends_on IS NULL OR e.ends_on >= ?)
+           AND s.deleted_at IS NULL AND e.student_id IN (${placeholders})`
+      ).bind(instId, year.id, classRec.id, batchRec.id, dateStr, dateStr, ...chunk).all<{ enrollment_id: string; student_id: string }>();
+    }),
+  );
+  const enrollmentByStudent = new Map(enrollmentChunks.flatMap((chunk) => chunk.results).map((row) => [row.student_id, row.enrollment_id]));
+  if (normalizedRecords.some((item) => !enrollmentByStudent.has(item.studentId) || (item.enrollmentId && item.enrollmentId !== enrollmentByStudent.get(item.studentId)))) {
+    return auth.membership.role === 'teacher' ? forbidden() : badRequest();
+  }
+
   const idempotencyKey = extractIdempotencyKey(c, body);
   if (idempotencyKey) {
     const cached = await getIdempotentResponse(DB, instId, idempotencyKey);
-    if (cached) {
-      return c.json(cached.body, cached.status as any);
-    }
-  }
-
-  // Resolve academic year, class, and batch
-  let year = await DB.prepare(`SELECT id FROM academic_years WHERE institution_id = ? AND status = 'active'`)
-    .bind(instId)
-    .first<{ id: string }>();
-
-  if (!year) {
-    const yearId = `yr-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(
-      `INSERT INTO academic_years (id, institution_id, name, starts_on, ends_on, status)
-       VALUES (?, ?, 'Academic Year 2026 - 2027', '2026-04-01', '2027-03-31', 'active')`
-    ).bind(yearId, instId).run();
-    year = { id: yearId };
-  }
-
-  let classRec = await DB.prepare(
-    `SELECT id FROM classes WHERE institution_id = ? AND name = ? AND deleted_at IS NULL`
-  )
-    .bind(instId, className)
-    .first<{ id: string }>();
-
-  if (!classRec) {
-    const newClassId = `cls-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(
-      `INSERT INTO classes (id, institution_id, name, code, status)
-       VALUES (?, ?, ?, ?, 'active')`
-    ).bind(newClassId, instId, className, className.replace(/\D/g, '') || 'C').run();
-    classRec = { id: newClassId };
-  }
-
-  let batchRec = await DB.prepare(
-    `SELECT id FROM batches WHERE institution_id = ? AND class_id = ? AND name = ? AND status != 'archived'`
-  )
-    .bind(instId, classRec.id, batchName)
-    .first<{ id: string }>();
-
-  if (!batchRec) {
-    const newBatchId = `bth-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(
-      `INSERT INTO batches (id, institution_id, class_id, name, starts_at, ends_at, meeting_days_json, status)
-       VALUES (?, ?, ?, ?, '04:30 PM', '06:30 PM', '["Mon","Tue","Wed","Thu","Fri"]', 'active')`
-    ).bind(newBatchId, instId, classRec.id, batchName).run();
-    batchRec = { id: newBatchId };
+    if (cached) return c.json(cached.body, cached.status as any);
   }
 
   // Find or create session
@@ -203,58 +235,38 @@ attendanceRouter.post('/:institutionId/attendance/submit', async (c) => {
     .bind(instId, year.id, classRec.id, batchRec.id, dateStr)
     .first<{ id: string }>();
 
-  let sessionId = session?.id;
-  if (!sessionId) {
-    sessionId = `ats-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(
-      `INSERT INTO attendance_sessions (id, institution_id, academic_year_id, class_id, batch_id, session_date, status, created_by_membership_id, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'submitted', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
-    ).bind(sessionId, instId, year.id, classRec.id, batchRec.id, dateStr, auth.membership.id).run();
-  } else {
-    await DB.prepare(
-      `UPDATE attendance_sessions
-       SET status = 'submitted', submitted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND institution_id = ?`
-    ).bind(sessionId, instId).run();
-  }
+  const sessionId = session?.id || `ats-${crypto.randomUUID().slice(0, 8)}`;
+  // D1 batch keeps the session and all record upserts together; validation above prevents
+  // unauthorized/invalid mixed batches from making any changes.
+  const statements = [session
+    ? DB.prepare(
+        `UPDATE attendance_sessions SET status = 'submitted', submitted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND institution_id = ?`
+      ).bind(sessionId, instId)
+    : DB.prepare(
+        `INSERT INTO attendance_sessions (id, institution_id, academic_year_id, class_id, batch_id, session_date, status, created_by_membership_id, submitted_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'submitted', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+      ).bind(sessionId, instId, year.id, classRec.id, batchRec.id, dateStr, auth.membership.id),
+    ...normalizedRecords.map((item) => {
+    const statusVal = item.status.toLowerCase();
+    return DB.prepare(
+      `INSERT INTO attendance_records (id, institution_id, session_id, student_id, enrollment_id, status, remarks, marked_by_membership_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(session_id, student_id) DO UPDATE SET
+         enrollment_id = excluded.enrollment_id,
+         status = excluded.status,
+         remarks = excluded.remarks,
+         marked_by_membership_id = excluded.marked_by_membership_id,
+         marked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
+    ).bind(`atr-${crypto.randomUUID().slice(0, 8)}`, instId, sessionId, item.studentId, enrollmentByStudent.get(item.studentId)!, statusVal, item.remarks, auth.membership.id);
+    }),
+  ];
 
-  // Upsert records
-  const statements = [];
-  for (const item of records as Array<{ studentId: string; enrollmentId?: string; status: string; remarks?: string }>) {
-    const statusVal =
-      item.status === 'Present' ? 'present' : item.status === 'Late' ? 'late' : 'absent';
-    const recId = `atr-${crypto.randomUUID().slice(0, 8)}`;
-
-    // Resolve enrollment ID if not provided
-    let enrId = item.enrollmentId;
-    if (!enrId) {
-      const foundEnr = await DB.prepare(
-        `SELECT id FROM enrollments WHERE institution_id = ? AND student_id = ? AND status = 'active'`
-      ).bind(instId, item.studentId).first<{ id: string }>();
-      enrId = foundEnr?.id;
-    }
-
-    if (enrId) {
-      statements.push(
-        DB.prepare(
-          `INSERT INTO attendance_records (id, institution_id, session_id, student_id, enrollment_id, status, remarks, marked_by_membership_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id, student_id) DO UPDATE SET
-             status = excluded.status,
-             remarks = excluded.remarks,
-             marked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
-        ).bind(recId, instId, sessionId, item.studentId, enrId, statusVal, item.remarks || null, auth.membership.id)
-      );
-    }
-  }
-
-  if (statements.length > 0) {
-    try {
-      await DB.batch(statements);
-    } catch (err) {
-      console.error('Error saving attendance records:', err);
-      return c.json({ error: 'Failed to record attendance' }, 500);
-    }
+  try {
+    await DB.batch(statements);
+  } catch (err) {
+    console.error('Error saving attendance records:', err);
+    return c.json({ error: 'Failed to record attendance' }, 500);
   }
 
   const responsePayload = { success: true, message: 'Attendance recorded successfully', sessionId };

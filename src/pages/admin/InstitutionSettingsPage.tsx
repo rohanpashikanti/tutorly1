@@ -133,6 +133,7 @@ export const InstitutionSettingsPage: React.FC = () => {
 
     // Background server call
     api.settings.update(activeInstitutionId, newSettings).catch(err => {
+      if (err instanceof Error && err.name === 'AbortError') return;
       // Rollback on failure
       saveStoredInstitutionSettings(previousStoredSettings);
       if (setInstitutionName) {

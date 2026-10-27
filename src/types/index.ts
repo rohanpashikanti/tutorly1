@@ -143,7 +143,7 @@ export interface TuitionTest {
   durationMinutes: number;
   maxMarks: number;
   status: 'Upcoming' | 'Ongoing' | 'Completed' | 'Scheduled';
-  averageScore?: number;
+  averageScore?: number | null;
 }
 
 export interface StudentMarks {
@@ -151,10 +151,10 @@ export interface StudentMarks {
   studentName: string;
   rollNo: string;
   avatar: string;
-  marks: number;
+  marks: number | null;
   maxMarks: number;
   grade: string;
-  percentage: number;
+  percentage: number | null;
   remarks: string;
   status: 'Draft' | 'Entered' | 'Published';
 }

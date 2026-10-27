@@ -14,6 +14,7 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { StudentMarks } from '../../types';
 import { api } from '../../api/client';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
@@ -74,6 +75,7 @@ export const ReportsCenterPage: React.FC = () => {
     const [examId, className, subject] = key.split('_');
     const ex = schoolExams.find(e => e.id === examId);
     return markList
+      .filter((mark): mark is StudentMarks & { marks: number } => typeof mark.marks === 'number')
       .filter(() => selectedClass === 'All Classes' || className === selectedClass)
       .map(m => {
         const max = m.maxMarks || 100;
@@ -98,7 +100,7 @@ export const ReportsCenterPage: React.FC = () => {
   const tuitionTestRows = Object.entries(tuitionTestMarks).flatMap(([key, markList]) => {
     const [testId, batchName, subject] = key.split('_');
     const t = tuitionTests.find(x => x.id === testId);
-    return markList.map(m => {
+    return markList.filter((mark): mark is StudentMarks & { marks: number } => typeof mark.marks === 'number').map(m => {
       const max = m.maxMarks || 50;
       const pct = `${Math.round((m.marks / max) * 100)}%`;
       const pctNum = (m.marks / max) * 100;

@@ -64,7 +64,7 @@ export const FeeCollectionPage: React.FC = () => {
     try {
       const [feeRes, stuRes, overRes] = await Promise.all([
         api.fees.getRecords(activeInstitutionId),
-        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
+        api.students.listAll(activeInstitutionId).catch(() => [] as Student[]),
         api.academics.getOverview(activeInstitutionId).catch(() => null)
       ]);
       const records = feeRes.records || [];
@@ -72,11 +72,11 @@ export const FeeCollectionPage: React.FC = () => {
       saveStoredStudentFees(records);
       setClassesList(overRes?.classes || []);
 
-      if (stuRes && stuRes.students) {
-        setStudents(stuRes.students);
-        saveStoredStudents(stuRes.students);
-        if (stuRes.students.length > 0 && !collectForm.studentId) {
-          setCollectForm((prev) => ({ ...prev, studentId: stuRes.students[0].id }));
+      if (stuRes) {
+        setStudents(stuRes);
+        saveStoredStudents(stuRes);
+        if (stuRes.length > 0 && !collectForm.studentId) {
+          setCollectForm((prev) => ({ ...prev, studentId: stuRes[0].id }));
         }
       }
     } catch (err) {

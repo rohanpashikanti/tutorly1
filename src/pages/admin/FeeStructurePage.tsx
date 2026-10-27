@@ -43,11 +43,11 @@ export const FeeStructurePage: React.FC = () => {
     try {
       const [plansRes, stuRes, recordsRes] = await Promise.all([
         api.fees.getPlans(activeInstitutionId).catch(() => ({ plans: [] as FeePlan[] })),
-        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
+        api.students.listAll(activeInstitutionId).catch(() => [] as Student[]),
         api.fees.getRecords(activeInstitutionId).catch(() => ({ records: [] as FeeRecord[] }))
       ]);
       setFeePlans(plansRes.plans || []);
-      setStudents(stuRes.students || []);
+      setStudents(stuRes || []);
       setFeeRecords(recordsRes.records || []);
     } catch (err) {
       console.error('Error fetching fee data:', err);

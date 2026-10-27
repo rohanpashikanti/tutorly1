@@ -42,6 +42,14 @@ export {
 
 const app = new Hono<{ Bindings: Env }>().basePath('/api');
 
+// API responses may contain private institutional data and must not be reused by
+// browser, proxy, or shared HTTP caches across authenticated sessions.
+app.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'private, no-store, max-age=0');
+  c.header('Pragma', 'no-cache');
+});
+
 app.get('/health', (c) => c.json({ status: 'ok', environment: c.env.APP_ENV }));
 
 app.get('/health/db', async (c) => {

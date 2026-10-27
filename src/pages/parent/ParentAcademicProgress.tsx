@@ -76,7 +76,7 @@ export const ParentAcademicProgress: React.FC = () => {
           subject: t.subject || 'General',
           marksObtained: m.marks,
           maxMarks: m.maxMarks || t.maxMarks || 100,
-          percentage: m.percentage || (m.maxMarks ? Math.round((m.marks / m.maxMarks) * 100) : 0)
+          percentage: m.percentage ?? (m.maxMarks ? Math.round((m.marks / m.maxMarks) * 100) : 0)
         });
       }
     });
@@ -96,7 +96,7 @@ export const ParentAcademicProgress: React.FC = () => {
           subject: 'All Subjects',
           marksObtained: m.marks,
           maxMarks: m.maxMarks || 100,
-          percentage: m.percentage || (m.maxMarks ? Math.round((m.marks / m.maxMarks) * 100) : 0)
+          percentage: m.percentage ?? (m.maxMarks ? Math.round((m.marks / m.maxMarks) * 100) : 0)
         });
       }
     });

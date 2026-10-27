@@ -53,7 +53,7 @@ export const AcademicAnalyticsPage: React.FC = () => {
         marksList.forEach((m) => {
           if (m.marks !== undefined && m.marks !== null) {
             const max = m.maxMarks || t.maxMarks || 100;
-            const pct = m.percentage || (max > 0 ? Math.round((m.marks / max) * 100) : 0);
+            const pct = m.percentage ?? (max > 0 ? Math.round((m.marks / max) * 100) : 0);
             list.push({
               studentId: m.studentId,
               studentName: m.studentName,
@@ -76,7 +76,7 @@ export const AcademicAnalyticsPage: React.FC = () => {
         marksList.forEach((m) => {
           if (m.marks !== undefined && m.marks !== null) {
             const max = m.maxMarks || 100;
-            const pct = m.percentage || (max > 0 ? Math.round((m.marks / max) * 100) : 0);
+            const pct = m.percentage ?? (max > 0 ? Math.round((m.marks / max) * 100) : 0);
             list.push({
               studentId: m.studentId,
               studentName: m.studentName,

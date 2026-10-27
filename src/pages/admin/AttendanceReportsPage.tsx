@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users,
   CheckCircle2,
@@ -13,14 +13,18 @@ import { Student } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { exportReportToPDF } from '../../utils/pdfExport';
 import { api } from '../../api/client';
-import { getStoredStudents } from '../../utils/storage';
+
+const ATTENDANCE_REPORT_PAGE_SIZE = 25;
 
 export const AttendanceReportsPage: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
   const [selectedClass, setSelectedClass] = useState('All Classes');
   const [selectedBatch, setSelectedBatch] = useState('All Batches');
   const [dateRange, setDateRange] = useState('1 Oct 2026 - 31 Oct 2026');
-  const [students, setStudents] = useState<Student[]>(() => getStoredStudents());
+  const [students, setStudents] = useState<Student[]>([]);
+  const [studentTotal, setStudentTotal] = useState(0);
+  const [studentPage, setStudentPage] = useState(1);
+  const studentRequestVersion = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [classesList, setClassesList] = useState<{ id: string; name: string }[]>([]);
@@ -41,15 +45,32 @@ export const AttendanceReportsPage: React.FC = () => {
 
   const loadData = useCallback(async () => {
     if (!activeInstitutionId) return;
+    const requestVersion = ++studentRequestVersion.current;
     setIsLoading(true);
     setLoadError(null);
+    setStudents([]);
     try {
       const [stuRes, repRes, overRes] = await Promise.all([
-        api.students.list(activeInstitutionId).catch(() => ({ students: [] as Student[], total: 0 })),
-        api.attendance.getReports(activeInstitutionId).catch(() => null),
-        api.academics.getOverview(activeInstitutionId).catch(() => null)
+        api.students.list(activeInstitutionId, {
+          page: studentPage,
+          limit: ATTENDANCE_REPORT_PAGE_SIZE,
+          class: selectedClass === 'All Classes' ? undefined : selectedClass,
+          batch: selectedBatch === 'All Batches' ? undefined : selectedBatch,
+        }),
+        api.attendance.getReports(activeInstitutionId),
+        api.academics.getOverview(activeInstitutionId)
       ]);
+      if (requestVersion !== studentRequestVersion.current) return;
+      if (stuRes.totalPages > 0 && studentPage > stuRes.totalPages) {
+        setStudentPage(stuRes.totalPages);
+        return;
+      }
+      if (stuRes.totalPages === 0 && studentPage !== 1) {
+        setStudentPage(1);
+        return;
+      }
       setStudents(stuRes.students || []);
+      setStudentTotal(stuRes.total || 0);
       setClassesList(overRes?.classes || []);
       setBatchesList(overRes?.batches || []);
 
@@ -63,43 +84,60 @@ export const AttendanceReportsPage: React.FC = () => {
         });
       }
     } catch (err) {
+      if (requestVersion !== studentRequestVersion.current) return;
       console.error('Failed to load attendance report:', err);
       setLoadError(err instanceof Error ? err.message : 'Failed to load attendance reports');
     } finally {
-      setIsLoading(false);
+      if (requestVersion === studentRequestVersion.current) setIsLoading(false);
     }
-  }, [activeInstitutionId]);
+  }, [activeInstitutionId, studentPage, selectedClass, selectedBatch]);
 
   useEffect(() => {
     void loadData();
+    return () => {
+      studentRequestVersion.current += 1;
+    };
   }, [loadData]);
 
-  const filteredStudents = students.filter((s) => {
-    const matchesClass = selectedClass === 'All Classes' || s.class === selectedClass;
-    const matchesBatch = selectedBatch === 'All Batches' || s.batch === selectedBatch;
-    return matchesClass && matchesBatch;
-  });
+  const filteredStudents = students;
 
-  const handleExportCSV = () => {
-    const data = filteredStudents.map((st) => ({
-      RollNo: st.rollNo,
-      Name: st.name,
-      Class: st.class,
-      Batch: st.batch,
-      AttendancePercentage: `${st.attendanceRate}%`,
-      DateRange: dateRange,
-    }));
-    downloadCSV(`Attendance_Report_${selectedClass}_${selectedBatch}.csv`, data);
-    showToast(`Exported attendance report for ${data.length} students to CSV`, 'success');
+  const getAllFilteredStudents = () => {
+    if (!activeInstitutionId) throw new Error('Select an institution before exporting this report.');
+    return api.students.listAll(activeInstitutionId, {
+      class: selectedClass === 'All Classes' ? undefined : selectedClass,
+      batch: selectedBatch === 'All Batches' ? undefined : selectedBatch,
+    });
   };
 
-  const handleExportPDF = () => {
-    const rows = filteredStudents.map((st) => ({
-      rollNo: st.rollNo,
-      name: st.name,
-      classBatch: `${st.class} - ${st.batch}`,
-      rate: `${st.attendanceRate}%`
-    }));
+  const handleExportCSV = async () => {
+    if (!activeInstitutionId) return;
+    try {
+      const allStudents = await getAllFilteredStudents();
+      const data = allStudents.map((st) => ({
+        RollNo: st.rollNo,
+        Name: st.name,
+        Class: st.class,
+        Batch: st.batch,
+        AttendancePercentage: `${st.attendanceRate}%`,
+        DateRange: dateRange,
+      }));
+      downloadCSV(`Attendance_Report_${selectedClass}_${selectedBatch}.csv`, data);
+      showToast(`Exported attendance report for ${data.length} students to CSV`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to export attendance report', 'error');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    if (!activeInstitutionId) return;
+    try {
+    const allStudents = await getAllFilteredStudents();
+    const rows = allStudents.map((st) => ({
+        rollNo: st.rollNo,
+        name: st.name,
+        classBatch: `${st.class} - ${st.batch}`,
+        rate: `${st.attendanceRate}%`
+      }));
 
     exportReportToPDF({
       title: 'Attendance Performance & Summary Report',
@@ -108,7 +146,7 @@ export const AttendanceReportsPage: React.FC = () => {
         { label: 'Class', value: selectedClass },
         { label: 'Batch', value: selectedBatch },
         { label: 'Period', value: dateRange },
-        { label: 'Total Students', value: String(filteredStudents.length) }
+        { label: 'Total Students', value: String(allStudents.length) }
       ],
       summaryStats: [
         { label: 'Overall Attendance', value: `${reports.overallRate}%` },
@@ -127,6 +165,9 @@ export const AttendanceReportsPage: React.FC = () => {
     });
 
     showToast('Generated print-ready PDF for attendance report', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to export attendance report', 'error');
+    }
   };
 
   return (
@@ -167,7 +208,7 @@ export const AttendanceReportsPage: React.FC = () => {
         <div className="filter-controls">
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Class</label>
-            <select className="select-field" value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
+            <select className="select-field" value={selectedClass} onChange={(e) => { setSelectedClass(e.target.value); setStudentPage(1); }}>
               <option>All Classes</option>
               {classesList.map((c) => (
                 <option key={c.id || c.name} value={c.name}>{c.name}</option>
@@ -177,7 +218,7 @@ export const AttendanceReportsPage: React.FC = () => {
 
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '2px' }}>Batch</label>
-            <select className="select-field" value={selectedBatch} onChange={(e) => setSelectedBatch(e.target.value)}>
+            <select className="select-field" value={selectedBatch} onChange={(e) => { setSelectedBatch(e.target.value); setStudentPage(1); }}>
               <option>All Batches</option>
               {batchesList.map((b) => (
                 <option key={b.id || b.name} value={b.name}>{b.name}</option>
@@ -252,7 +293,7 @@ export const AttendanceReportsPage: React.FC = () => {
             <div className="stat-label">Avg per Student</div>
             <div className="stat-value">{isLoading ? '—' : (reports.presentCount + reports.absentCount > 0 ? `${reports.avgRate}%` : '—')}</div>
             <div className="stat-footer">
-              <span className="stat-subtext">{reports.presentCount + reports.absentCount > 0 ? `Across ${filteredStudents.length} students` : 'No records yet'}</span>
+              <span className="stat-subtext">{reports.presentCount + reports.absentCount > 0 ? `Across ${studentTotal} students` : 'No records yet'}</span>
             </div>
           </div>
         </div>
@@ -274,7 +315,7 @@ export const AttendanceReportsPage: React.FC = () => {
       {/* Student Attendance Summary Table */}
       <div className="card">
         <div className="card-header">
-          <div className="card-title">Student Attendance Breakdown ({filteredStudents.length})</div>
+          <div className="card-title">Student Attendance Breakdown ({studentTotal})</div>
         </div>
 
         <div className="table-container">
@@ -305,7 +346,7 @@ export const AttendanceReportsPage: React.FC = () => {
               ) : (
                 filteredStudents.map((st, i) => (
                   <tr key={st.id}>
-                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{i + 1}</td>
+                    <td style={{ color: '#94A3B8', fontSize: '12px' }}>{(studentPage - 1) * ATTENDANCE_REPORT_PAGE_SIZE + i + 1}</td>
                     <td>
                       <div className="user-table-cell">
                         <img src={st.avatar} alt={st.name} className="user-table-avatar" />
@@ -325,6 +366,14 @@ export const AttendanceReportsPage: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+        <div style={{ padding: '14px 20px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#64748B' }}>
+          <span>Showing {studentTotal === 0 ? 0 : (studentPage - 1) * ATTENDANCE_REPORT_PAGE_SIZE + 1}-{(studentPage - 1) * ATTENDANCE_REPORT_PAGE_SIZE + filteredStudents.length} of {studentTotal} students</span>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <button className="btn btn-sm btn-secondary" disabled={isLoading || studentPage <= 1} onClick={() => setStudentPage((current) => current - 1)}>Previous</button>
+            <span>{studentTotal === 0 ? '0 / 0' : `${studentPage} / ${Math.ceil(studentTotal / ATTENDANCE_REPORT_PAGE_SIZE)}`}</span>
+            <button className="btn btn-sm btn-secondary" disabled={isLoading || studentPage >= Math.ceil(studentTotal / ATTENDANCE_REPORT_PAGE_SIZE)} onClick={() => setStudentPage((current) => current + 1)}>Next</button>
+          </div>
         </div>
       </div>
     </div>

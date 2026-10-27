@@ -1,44 +1,74 @@
-import React from 'react';
+import React, { Component, Suspense, lazy } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { MobileNav } from './components/layout/MobileNav';
-
-// Auth
-import { LoginPage } from './pages/auth/LoginPage';
-
-// Admin Pages
-import { AdminDashboard } from './pages/admin/AdminDashboard';
-import { StudentDirectory } from './pages/admin/StudentDirectory';
-import { StudentProfilePage } from './pages/admin/StudentProfilePage';
-import { TeacherManagement } from './pages/admin/TeacherManagement';
-import { ClassesBatchesSubjects } from './pages/admin/ClassesBatchesSubjects';
-import { AcademicCalendarPage } from './pages/admin/AcademicCalendarPage';
-import { AttendanceRegisterPage } from './pages/admin/AttendanceRegisterPage';
-import { AttendanceReportsPage } from './pages/admin/AttendanceReportsPage';
-import { SchoolExaminationsPage } from './pages/admin/SchoolExaminationsPage';
-import { TuitionTestsPage } from './pages/admin/TuitionTestsPage';
-import { AcademicAnalyticsPage } from './pages/admin/AcademicAnalyticsPage';
-import { StudentFeesPage } from './pages/admin/StudentFeesPage';
-import { UserManagementPage } from './pages/admin/UserManagementPage';
-import { InstitutionSettingsPage } from './pages/admin/InstitutionSettingsPage';
-import { ReportsCenterPage } from './pages/admin/ReportsCenterPage';
-
-// Teacher Pages
-import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
-import { TeacherClassesPage } from './pages/teacher/TeacherClassesPage';
-import { TeacherStudentDetailPage } from './pages/teacher/TeacherStudentDetailPage';
-
-// Parent Pages
-import { ParentDashboard } from './pages/parent/ParentDashboard';
-import { ParentAcademicProgress } from './pages/parent/ParentAcademicProgress';
-import { ParentAttendancePage } from './pages/parent/ParentAttendancePage';
-import { ParentFeesPage } from './pages/parent/ParentFeesPage';
+import { PwaControls } from './pwa/PwaControls';
 
 import { X, CheckCircle2, AlertCircle, Info } from 'lucide-react';
 
+function lazyNamedPage(loader: () => Promise<Record<string, React.ComponentType<any>>>, exportName: string) {
+  return lazy(async () => {
+    const module = await loader();
+    const page = module[exportName];
+    if (!page) throw new Error(`Page export ${exportName} was not found`);
+    return { default: page };
+  });
+}
+
+const LoginPage = lazyNamedPage(() => import('./pages/auth/LoginPage'), 'LoginPage');
+const AdminDashboard = lazyNamedPage(() => import('./pages/admin/AdminDashboard'), 'AdminDashboard');
+const StudentDirectory = lazyNamedPage(() => import('./pages/admin/StudentDirectory'), 'StudentDirectory');
+const StudentProfilePage = lazyNamedPage(() => import('./pages/admin/StudentProfilePage'), 'StudentProfilePage');
+const TeacherManagement = lazyNamedPage(() => import('./pages/admin/TeacherManagement'), 'TeacherManagement');
+const ClassesBatchesSubjects = lazyNamedPage(() => import('./pages/admin/ClassesBatchesSubjects'), 'ClassesBatchesSubjects');
+const AcademicCalendarPage = lazyNamedPage(() => import('./pages/admin/AcademicCalendarPage'), 'AcademicCalendarPage');
+const AttendanceRegisterPage = lazyNamedPage(() => import('./pages/admin/AttendanceRegisterPage'), 'AttendanceRegisterPage');
+const AttendanceReportsPage = lazyNamedPage(() => import('./pages/admin/AttendanceReportsPage'), 'AttendanceReportsPage');
+const SchoolExaminationsPage = lazyNamedPage(() => import('./pages/admin/SchoolExaminationsPage'), 'SchoolExaminationsPage');
+const TuitionTestsPage = lazyNamedPage(() => import('./pages/admin/TuitionTestsPage'), 'TuitionTestsPage');
+const AcademicAnalyticsPage = lazyNamedPage(() => import('./pages/admin/AcademicAnalyticsPage'), 'AcademicAnalyticsPage');
+const StudentFeesPage = lazyNamedPage(() => import('./pages/admin/StudentFeesPage'), 'StudentFeesPage');
+const UserManagementPage = lazyNamedPage(() => import('./pages/admin/UserManagementPage'), 'UserManagementPage');
+const InstitutionSettingsPage = lazyNamedPage(() => import('./pages/admin/InstitutionSettingsPage'), 'InstitutionSettingsPage');
+const ReportsCenterPage = lazyNamedPage(() => import('./pages/admin/ReportsCenterPage'), 'ReportsCenterPage');
+const TeacherDashboard = lazyNamedPage(() => import('./pages/teacher/TeacherDashboard'), 'TeacherDashboard');
+const TeacherClassesPage = lazyNamedPage(() => import('./pages/teacher/TeacherClassesPage'), 'TeacherClassesPage');
+const TeacherStudentDetailPage = lazyNamedPage(() => import('./pages/teacher/TeacherStudentDetailPage'), 'TeacherStudentDetailPage');
+const ParentDashboard = lazyNamedPage(() => import('./pages/parent/ParentDashboard'), 'ParentDashboard');
+const ParentAcademicProgress = lazyNamedPage(() => import('./pages/parent/ParentAcademicProgress'), 'ParentAcademicProgress');
+const ParentAttendancePage = lazyNamedPage(() => import('./pages/parent/ParentAttendancePage'), 'ParentAttendancePage');
+const ParentFeesPage = lazyNamedPage(() => import('./pages/parent/ParentFeesPage'), 'ParentFeesPage');
+
+class LazyPageErrorBoundary extends Component<React.PropsWithChildren, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div role="alert" style={{ padding: '48px 24px', textAlign: 'center', color: '#334155' }}>
+          <h2 style={{ marginBottom: '8px' }}>This page could not be loaded</h2>
+          <p style={{ marginBottom: '16px' }}>Check your connection, then reload Tutorly to try again.</p>
+          <button className="btn btn-primary" onClick={() => window.location.reload()}>Reload Tutorly</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const PageLoadingFallback = () => (
+  <div role="status" aria-live="polite" style={{ minHeight: '240px', display: 'grid', placeItems: 'center', color: '#64748B', fontSize: '14px' }}>
+    Loading page…
+  </div>
+);
+
 const AppShell: React.FC = () => {
-  const { isLoggedIn, hasMembership, isAuthLoading, currentRoute, toasts, dismissToast, role } = useApp();
+  const { isLoggedIn, hasMembership, isAuthLoading, currentRoute, toasts, dismissToast, role, currentUser, activeInstitutionId } = useApp();
 
   if (isAuthLoading) {
     return <div role="status" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: '#64748B', fontSize: '14px' }}>Restoring your session…</div>;
@@ -46,7 +76,13 @@ const AppShell: React.FC = () => {
 
   // No authenticated session or no institution membership: stay outside the demo dashboards.
   if (!isLoggedIn || !hasMembership || currentRoute === 'login' || currentRoute === 'onboarding') {
-    return <LoginPage />;
+    return (
+      <LazyPageErrorBoundary key="login">
+        <Suspense fallback={<PageLoadingFallback />}>
+          <LoginPage />
+        </Suspense>
+      </LazyPageErrorBoundary>
+    );
   }
 
   const teacherRoutes = new Set(['teacher-dashboard', 'teacher-classes', 'teacher-student-detail', 'student-profile', 'attendance-register']);
@@ -149,8 +185,12 @@ const AppShell: React.FC = () => {
       {/* Main App Content Area */}
       <div className="main-wrapper">
         <Header />
-        <main className="main-content">
-          {renderActivePage()}
+        <main className="main-content" key={`${currentUser.id}:${activeInstitutionId}:${role}`}>
+          <LazyPageErrorBoundary key={currentRoute}>
+            <Suspense fallback={<PageLoadingFallback />}>
+              {renderActivePage()}
+            </Suspense>
+          </LazyPageErrorBoundary>
         </main>
       </div>
 
@@ -210,6 +250,7 @@ const AppShell: React.FC = () => {
 export function App() {
   return (
     <AppProvider>
+      <PwaControls />
       <AppShell />
     </AppProvider>
   );

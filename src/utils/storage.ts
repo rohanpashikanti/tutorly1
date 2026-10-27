@@ -1,8 +1,4 @@
-/**
- * Persistent Storage Layer for Tutorly
- * Uses browser localStorage to persist all changes across page reloads,
- * initialized with default mock data if not yet saved.
- */
+/** Persistent cache for app data, partitioned by a server-verified session scope. */
 
 import {
   CalendarEvent,
@@ -40,13 +36,62 @@ export const STORAGE_KEYS = {
   HOMEWORK: 'tutorly_homework'
 };
 
+export interface VerifiedStorageScope {
+  userId: string;
+  institutionId: string;
+  role: string;
+}
+
+const PRIVATE_STORAGE_PREFIX = 'tutorly:private:v1:';
+let activeStorageScope: string | null = null;
+
+function createScopeKey(scope: VerifiedStorageScope): string | null {
+  if (!scope.userId || !scope.institutionId || !scope.role) return null;
+  return `${PRIVATE_STORAGE_PREFIX}${encodeURIComponent(scope.userId)}:${encodeURIComponent(scope.institutionId)}:${encodeURIComponent(scope.role)}`;
+}
+
+/** Activate a cache only after the server has confirmed user, membership, institution, and role. */
+export function activateVerifiedStorageScope(scope: VerifiedStorageScope | null): string | null {
+  activeStorageScope = scope ? createScopeKey(scope) : null;
+  return activeStorageScope;
+}
+
+export function getStorageScopeToken(): string | null {
+  return activeStorageScope;
+}
+
+export function isStorageScopeCurrent(token: string | null): boolean {
+  return Boolean(token && activeStorageScope === token);
+}
+
+function scopedKey(key: string): string | null {
+  return activeStorageScope ? `${activeStorageScope}:${key}` : null;
+}
+
+function legacyBusinessKeys(): string[] {
+  return Object.values(STORAGE_KEYS);
+}
+
+/** Remove only pre-isolation Tutorly business keys; unrelated preferences are preserved. */
+export function clearLegacyStoredBusinessData(): void {
+  if (typeof localStorage === 'undefined') return;
+  for (const key of legacyBusinessKeys()) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Storage may be unavailable or locked by the browser.
+    }
+  }
+}
+
 /**
  * Generic getter from localStorage with fallback
  */
 export function getStoredData<T>(key: string, defaultValue: T): T {
-  if (typeof localStorage === 'undefined') return defaultValue;
+  const storageKey = scopedKey(key);
+  if (!storageKey || typeof localStorage === 'undefined') return defaultValue;
   try {
-    const raw = localStorage.getItem(key);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return defaultValue;
     return JSON.parse(raw) as T;
   } catch (err) {
@@ -59,9 +104,10 @@ export function getStoredData<T>(key: string, defaultValue: T): T {
  * Generic setter to localStorage
  */
 export function setStoredData<T>(key: string, value: T): void {
-  if (typeof localStorage === 'undefined') return;
+  const storageKey = scopedKey(key);
+  if (!storageKey || typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(storageKey, JSON.stringify(value));
   } catch (err) {
     console.error(`Error writing ${key} to storage:`, err);
   }
@@ -71,29 +117,17 @@ export function setStoredData<T>(key: string, value: T): void {
  * Clear all business data keys from localStorage
  */
 export function clearAllStoredBusinessData(): void {
-  const businessKeys = [
-    STORAGE_KEYS.CALENDAR_EVENTS,
-    STORAGE_KEYS.STUDENTS,
-    STORAGE_KEYS.TEACHERS,
-    STORAGE_KEYS.CLASSES,
-    STORAGE_KEYS.BATCHES,
-    STORAGE_KEYS.SUBJECTS,
-    STORAGE_KEYS.SCHOOL_EXAMS,
-    STORAGE_KEYS.SCHOOL_EXAM_MARKS,
-    STORAGE_KEYS.TUITION_TESTS,
-    STORAGE_KEYS.TUITION_TEST_MARKS,
-    STORAGE_KEYS.STUDENT_FEES,
-    STORAGE_KEYS.USERS,
-    STORAGE_KEYS.ATTENDANCE_SESSIONS,
-    STORAGE_KEYS.ANNOUNCEMENTS,
-    STORAGE_KEYS.HOMEWORK,
-  ];
-  for (const k of businessKeys) {
-    try {
-      localStorage.removeItem(k);
-    } catch {
-      // ignore
+  if (typeof localStorage === 'undefined') return;
+  const legacyKeys = new Set(legacyBusinessKeys());
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index--) {
+      const key = localStorage.key(index);
+      if (key && (legacyKeys.has(key) || key.startsWith(PRIVATE_STORAGE_PREFIX))) {
+        localStorage.removeItem(key);
+      }
     }
+  } catch {
+    clearLegacyStoredBusinessData();
   }
 }
 
