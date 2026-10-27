@@ -28,6 +28,18 @@
   gap: 10px;
 }
 
+.pwa-notice-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.pwa-notice-deferred {
+  border-color: #FED7AA;
+  background: #FFF7ED;
+}
+
 .pwa-offline {
   border-color: #FDE68A;
   background: #FFFBEB;
@@ -44,6 +56,17 @@
   font-weight: 650;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.pwa-button-secondary {
+  border: 1px solid #CBD5E1;
+  background: #F8FAFC;
+  color: #334155;
+}
+
+.pwa-button-secondary:hover {
+  background: #F1F5F9;
+  border-color: #94A3B8;
 }
 
 .pwa-button:focus-visible,

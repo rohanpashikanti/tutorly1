@@ -7,6 +7,10 @@ import {
   acquireOrGetIdempotentResponse,
   getIdempotentResponse,
   saveIdempotentResponse,
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  MAX_PAGE_NUMBER,
+  parsePageParameter,
 } from '../middleware';
 
 export const teachersRouter = new Hono<{ Bindings: Env }>();
@@ -32,8 +36,21 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
-  // 1. Fetch teachers
-  const teachersPromise = DB.prepare(
+  const page = parsePageParameter(c.req.query('page'), 1, MAX_PAGE_NUMBER);
+  const limit = parsePageParameter(c.req.query('limit'), 50, MAX_PAGE_SIZE);
+  if (page === null || limit === null) {
+    return c.json({ error: 'Invalid pagination parameters' }, 400);
+  }
+  const offset = (page - 1) * limit;
+
+  const countRow = await DB.prepare(
+    `SELECT COUNT(*) AS total FROM teachers WHERE institution_id = ? AND status != 'terminated'`
+  ).bind(instId).first<{ total: number }>();
+  const total = countRow?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  // 1. Fetch paginated teachers with deterministic tie-breaker
+  const teachersRaw = await DB.prepare(
     `SELECT t.id, t.teacher_code, t.designation, t.phone, t.date_of_birth,
             t.gender, t.address, t.avatar_url, t.status,
             COALESCE(ur.display_name, 'Teacher') AS name,
@@ -42,9 +59,10 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
      JOIN memberships m ON m.id = t.membership_id
      JOIN user_refs ur ON ur.id = m.user_ref_id
      WHERE t.institution_id = ? AND t.status != 'terminated'
-     ORDER BY t.created_at DESC`
+     ORDER BY t.created_at DESC, t.id DESC
+     LIMIT ? OFFSET ?`
   )
-    .bind(instId)
+    .bind(instId, limit, offset)
     .all<{
       id: string;
       teacher_code: string;
@@ -59,19 +77,26 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
       email: string;
     }>();
 
-  // 2. Fetch assignments (indexed, no Cartesian product join)
-  const assignmentsPromise = DB.prepare(
-    `SELECT ta.teacher_id, c.name AS class_name, c.id AS class_id, s.name AS subject_name
-     FROM teacher_assignments ta
-     JOIN classes c ON c.id = ta.class_id
-     JOIN subjects s ON s.id = ta.subject_id
-     WHERE ta.institution_id = ? AND ta.status = 'active'`
-  )
-    .bind(instId)
-    .all<{ teacher_id: string; class_name: string; class_id: string; subject_name: string }>();
+  const teacherIds = teachersRaw.results.map((t) => t.id);
+
+  // 2. Fetch assignments only for the current page of teachers (if any)
+  let assignmentsResults: Array<{ teacher_id: string; class_name: string; class_id: string; subject_name: string }> = [];
+  if (teacherIds.length > 0) {
+    const placeholders = teacherIds.map(() => '?').join(', ');
+    const assignmentsRaw = await DB.prepare(
+      `SELECT ta.teacher_id, c.name AS class_name, c.id AS class_id, s.name AS subject_name
+       FROM teacher_assignments ta
+       JOIN classes c ON c.id = ta.class_id
+       JOIN subjects s ON s.id = ta.subject_id
+       WHERE ta.institution_id = ? AND ta.status = 'active' AND ta.teacher_id IN (${placeholders})`
+    )
+      .bind(instId, ...teacherIds)
+      .all<{ teacher_id: string; class_name: string; class_id: string; subject_name: string }>();
+    assignmentsResults = assignmentsRaw.results;
+  }
 
   // 3. Fetch active enrollments per class in one efficient group-by query
-  const enrollmentsPromise = DB.prepare(
+  const enrollmentsRaw = await DB.prepare(
     `SELECT class_id, COUNT(DISTINCT student_id) AS student_count
      FROM enrollments
      WHERE institution_id = ? AND status = 'active'
@@ -79,12 +104,6 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
   )
     .bind(instId)
     .all<{ class_id: string; student_count: number }>();
-
-  const [teachersRaw, assignmentsRaw, enrollmentsRaw] = await Promise.all([
-    teachersPromise,
-    assignmentsPromise,
-    enrollmentsPromise,
-  ]);
 
   const classStudentCountMap = new Map<string, number>();
   for (const row of enrollmentsRaw.results) {
@@ -95,7 +114,7 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
   const teacherSubjectsMap = new Map<string, Set<string>>();
   const teacherStudentIdsMap = new Map<string, number>();
 
-  for (const a of assignmentsRaw.results) {
+  for (const a of assignmentsResults) {
     if (!teacherClassesMap.has(a.teacher_id)) teacherClassesMap.set(a.teacher_id, new Set());
     teacherClassesMap.get(a.teacher_id)!.add(a.class_name);
 
@@ -133,8 +152,9 @@ teachersRouter.get('/:institutionId/teachers', async (c) => {
     };
   });
 
-  return c.json({ teachers });
+  return c.json({ teachers, total, totalPages, page, limit });
 });
+
 
 teachersRouter.post('/:institutionId/teachers', async (c) => {
   const auth = await authenticateInstitution(c, ['owner', 'admin']);

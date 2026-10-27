@@ -287,6 +287,30 @@ studentsRouter.get('/:institutionId/students/:studentId', async (c) => {
   return c.json({ student: s });
 });
 
+function parseCurrencyToPaise(value: unknown, fieldName: string): { paise: number } | { error: string } {
+  if (value === undefined || value === null || value === '') {
+    return { paise: 0 };
+  }
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return { error: `${fieldName} must be a valid number` };
+  }
+  const numeric = typeof value === 'string' ? Number(value.trim()) : value;
+  if (!Number.isFinite(numeric) || Number.isNaN(numeric)) {
+    return { error: `${fieldName} must be a valid number` };
+  }
+  if (numeric < 0) {
+    return { error: `${fieldName} cannot be negative` };
+  }
+  const roundedPaise = Math.round(numeric * 100);
+  if (Math.abs(numeric * 100 - roundedPaise) > 1e-4) {
+    return { error: `${fieldName} cannot have fractional paise` };
+  }
+  if (!Number.isSafeInteger(roundedPaise) || roundedPaise > 1_000_000_000_00) {
+    return { error: `${fieldName} exceeds maximum allowable amount` };
+  }
+  return { paise: roundedPaise };
+}
+
 studentsRouter.post('/:institutionId/students', async (c) => {
   const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
@@ -302,15 +326,18 @@ studentsRouter.post('/:institutionId/students', async (c) => {
   const fatherName = typeof body.fatherName === 'string' ? body.fatherName.trim() : 'Parent';
   const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
   const email = typeof body.email === 'string' ? body.email.trim() : '';
-  const rawTuition = body.tuitionFeeAmount !== undefined && body.tuitionFeeAmount !== null && body.tuitionFeeAmount !== ''
-    ? Number(body.tuitionFeeAmount)
-    : 0;
-  const tuitionFeeAmount = !isNaN(rawTuition) && rawTuition >= 0 ? rawTuition : 0;
 
-  const rawInitPay = body.initialPayment !== undefined && body.initialPayment !== null && body.initialPayment !== ''
-    ? Number(body.initialPayment)
-    : 0;
-  const initialPayment = !isNaN(rawInitPay) && rawInitPay >= 0 ? rawInitPay : 0;
+  const tuitionResult = parseCurrencyToPaise(body.tuitionFeeAmount, 'Tuition fee amount');
+  if ('error' in tuitionResult) return c.json({ error: tuitionResult.error }, 400);
+  const tuitionPaise = tuitionResult.paise;
+
+  const paymentResult = parseCurrencyToPaise(body.initialPayment, 'Initial payment');
+  if ('error' in paymentResult) return c.json({ error: paymentResult.error }, 400);
+  const paymentPaise = paymentResult.paise;
+
+  if (paymentPaise > tuitionPaise) {
+    return c.json({ error: 'Initial payment cannot exceed the tuition fee charge' }, 400);
+  }
 
   const feeDueDate = typeof body.feeDueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.feeDueDate.trim())
     ? body.feeDueDate.trim()
@@ -463,7 +490,7 @@ studentsRouter.post('/:institutionId/students', async (c) => {
     DB.prepare(
       `INSERT INTO student_fee_assignments (id, institution_id, student_id, enrollment_id, description, agreed_amount_paise, discount_paise, starts_on, status)
        VALUES (?, ?, ?, ?, 'Annual Tuition Fee', ?, 0, strftime('%Y-%m-%d', 'now'), 'active')`
-    ).bind(feeAssignmentId, instId, studentId, enrollmentId, Math.round(tuitionFeeAmount * 100)),
+    ).bind(feeAssignmentId, instId, studentId, enrollmentId, tuitionPaise),
 
     // 6. Create Initial Fee Charge using the entered applicable tuition fee amount
     DB.prepare(
@@ -476,22 +503,19 @@ studentsRouter.post('/:institutionId/students', async (c) => {
       enrollmentId,
       feeAssignmentId,
       feeDueDate || new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      Math.round(tuitionFeeAmount * 100),
-      tuitionFeeAmount === 0 || initialPayment >= tuitionFeeAmount
+      tuitionPaise,
+      tuitionPaise === 0 || paymentPaise >= tuitionPaise
         ? 'paid'
-        : initialPayment > 0
+        : paymentPaise > 0
         ? 'partial'
         : 'open'
     ),
   ];
 
   // If initial payment was made at admission, record payment and allocation atomically!
-  if (initialPayment > 0) {
+  if (paymentPaise > 0) {
     const paymentId = `pmt-${crypto.randomUUID().slice(0, 8)}`;
     const receiptNo = `REC-2026-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
-    const paymentPaise = Math.round(initialPayment * 100);
-    const chargePaise = Math.round(tuitionFeeAmount * 100);
-    const allocatedPaise = Math.min(paymentPaise, chargePaise);
 
     statements.push(
       DB.prepare(
@@ -501,7 +525,7 @@ studentsRouter.post('/:institutionId/students', async (c) => {
       DB.prepare(
         `INSERT INTO payment_allocations (institution_id, payment_id, charge_id, student_id, amount_paise)
          VALUES (?, ?, ?, ?, ?)`
-      ).bind(instId, paymentId, chargeId, studentId, allocatedPaise)
+      ).bind(instId, paymentId, chargeId, studentId, paymentPaise)
     );
   }
 

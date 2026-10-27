@@ -184,6 +184,7 @@ export interface FeeRecord {
   paymentMethod?: 'UPI' | 'Cash' | 'Card' | 'Bank Transfer';
   paymentDate?: string;
   transactionId?: string;
+  externalReference?: string;
   status: 'Paid' | 'Pending' | 'Overdue';
   receiptNo?: string;
   parentName?: string;

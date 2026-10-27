@@ -4,7 +4,12 @@ import { Env, authenticateInstitution } from '../middleware';
 export const dashboardRouter = new Hono<{ Bindings: Env }>();
 
 dashboardRouter.get('/:institutionId/dashboard/summary', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const institutionId = c.req.param('institutionId')?.trim();
+  if (!institutionId) {
+    return c.json({ error: 'Institution ID required' }, 403);
+  }
+
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const { DB } = c.env;
@@ -79,7 +84,7 @@ dashboardRouter.get('/:institutionId/dashboard/summary', async (c) => {
     `SELECT id, title, event_type, starts_at, description
      FROM calendar_events
      WHERE institution_id = ? AND status != 'archived' AND starts_at >= ?
-     ORDER BY starts_at ASC
+     ORDER BY starts_at ASC, id ASC
      LIMIT 4`
   )
     .bind(instId, todayStr)

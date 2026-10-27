@@ -14,6 +14,7 @@ import {
   CalendarEvent,
   AcademicYear,
 } from '../types';
+import { beginMutation } from '../pwa/updateSafety';
 
 let activeApiSessionScope: string | null = null;
 let apiSessionGeneration = 0;
@@ -40,6 +41,10 @@ async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promi
   const generation = apiSessionGeneration;
   const controller = new AbortController();
   pendingApiRequests.add(controller);
+  const isMutation = Boolean(
+    init.method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(init.method.toUpperCase())
+  );
+  const endMutation = isMutation ? beginMutation(`API ${init.method?.toUpperCase()} in-flight`) : undefined;
   try {
     const response = await fetch(input, {
       ...init,
@@ -57,6 +62,7 @@ async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promi
     if (generation !== apiSessionGeneration) throw staleSessionError();
     throw error;
   } finally {
+    endMutation?.();
     pendingApiRequests.delete(controller);
   }
 }
@@ -408,13 +414,39 @@ export const api = {
       const res = await apiFetch(`/api/institutions/${institutionId}/fees/plans`, { credentials: 'same-origin' });
       return handleResponse<{ plans: FeePlan[] }>(res);
     },
-    async getRecords(institutionId: string) {
-      const res = await apiFetch(`/api/institutions/${institutionId}/fees/records`, { credentials: 'same-origin' });
-      return handleResponse<{ records: FeeRecord[] }>(res);
+    async getRecords(institutionId: string, params?: { page?: number; limit?: number }) {
+      const query = new URLSearchParams();
+      if (params?.page) query.set('page', String(params.page));
+      if (params?.limit) query.set('limit', String(params.limit));
+      const qs = query.toString() ? `?${query.toString()}` : '';
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/records${qs}`, { credentials: 'same-origin' });
+      return handleResponse<{
+        records: FeeRecord[];
+        total?: number;
+        totalPages?: number;
+        page?: number;
+        limit?: number;
+        summary?: {
+          totalAssigned: number;
+          totalCollected: number;
+          totalOutstanding: number;
+          fullyPaidCount: number;
+          unpaidCount: number;
+          partialCount: number;
+        };
+      }>(res);
     },
     async recordPayment(
       institutionId: string,
-      data: { studentId: string; amount: number; method: string; notes?: string; idempotencyKey: string }
+      data: {
+        studentId: string;
+        amount: number;
+        method: string;
+        notes?: string;
+        paymentDate?: string;
+        externalReference?: string;
+        idempotencyKey: string;
+      }
     ) {
       const res = await apiFetch(`/api/institutions/${institutionId}/fees/payments`, {
         method: 'POST',
@@ -428,16 +460,29 @@ export const api = {
         receiptNo: string;
         amount: number;
         studentName: string;
+        paymentDate?: string;
+        externalReference?: string;
       }>(res);
       if (!result.success || !result.paymentId || !result.receiptNo) {
         throw new Error('The server did not confirm that the payment was recorded.');
       }
       return result;
     },
-    async getPayments(institutionId: string) {
-      const res = await apiFetch(`/api/institutions/${institutionId}/fees/payments`, { credentials: 'same-origin' });
-      return handleResponse<{ payments: any[] }>(res);
+    async getPayments(institutionId: string, params?: { page?: number; limit?: number }) {
+      const query = new URLSearchParams();
+      if (params?.page) query.set('page', String(params.page));
+      if (params?.limit) query.set('limit', String(params.limit));
+      const qs = query.toString() ? `?${query.toString()}` : '';
+      const res = await apiFetch(`/api/institutions/${institutionId}/fees/payments${qs}`, { credentials: 'same-origin' });
+      return handleResponse<{
+        payments: any[];
+        total?: number;
+        totalPages?: number;
+        page?: number;
+        limit?: number;
+      }>(res);
     },
+
     async getReports(institutionId: string) {
       const res = await apiFetch(`/api/institutions/${institutionId}/fees/reports`, { credentials: 'same-origin' });
       return handleResponse<any>(res);
@@ -610,6 +655,32 @@ export const api = {
         lateCount: number;
         attendanceRate: number;
         records: any[];
+      }>(res);
+    },
+    async getChildAcademicResults(institutionId: string, studentId: string) {
+      const res = await apiFetch(`/api/institutions/${institutionId}/parent/children/${studentId}/academics`, {
+        credentials: 'same-origin',
+      });
+      return handleResponse<{
+        studentId: string;
+        studentName: string;
+        results: Array<{
+          id: string;
+          assessmentId: string;
+          date: string;
+          name: string;
+          category: 'Tuition Test' | 'School Examination';
+          type: string;
+          subject: string;
+          marksObtained: number | null;
+          maxMarks: number;
+          percentage: number | null;
+          status: string;
+          remarks?: string | null;
+          academicYear?: string | null;
+          className?: string | null;
+          batchName?: string | null;
+        }>;
       }>(res);
     },
     async getTeacher(institutionId: string) {

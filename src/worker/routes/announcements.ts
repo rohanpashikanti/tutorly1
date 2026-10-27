@@ -1,11 +1,16 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import { Env, authenticateInstitution, readJson, parsePageParameter } from '../middleware';
 
 export const announcementsRouter = new Hono<{ Bindings: Env }>();
 
 announcementsRouter.get('/:institutionId/announcements', async (c) => {
   const auth = await authenticateInstitution(c);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
+
+  const limit = parsePageParameter(c.req.query('limit'), 50, 100);
+  if (limit === null) {
+    return c.json({ error: 'Invalid limit parameter' }, 400);
+  }
 
   let query = `
     SELECT a.id, a.title, a.content, a.audience, a.priority, a.pinned,
@@ -25,7 +30,9 @@ announcementsRouter.get('/:institutionId/announcements', async (c) => {
     query += ` AND a.audience IN ('all', 'parents')`;
   }
 
-  query += ` ORDER BY a.pinned DESC, a.created_at DESC`;
+  query += ` ORDER BY a.pinned DESC, a.created_at DESC, a.id DESC LIMIT ?`;
+  params.push(limit);
+
 
   const raw = await c.env.DB.prepare(query).bind(...params).all<{
     id: string;

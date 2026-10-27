@@ -21,6 +21,25 @@ export interface MembershipRecord {
   institution_name: string;
 }
 
+export const DEFAULT_PAGE_SIZE = 25;
+export const MAX_PAGE_SIZE = 100;
+export const MAX_PAGE_NUMBER = 1_000_000;
+
+export function parsePageParameter(
+  value: string | undefined,
+  fallback: number,
+  max: number
+): number | null {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= max ? parsed : null;
+}
+
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
 export function jsonObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

@@ -27,6 +27,7 @@ import { Student, FeeRecord } from '../../types';
 import { downloadCSV } from '../../utils/demoActions';
 import { ParentContactActions } from '../../components/common/ParentContactActions';
 import { api } from '../../api/client';
+import { useTrackDirtyForm } from '../../pwa/updateSafety';
 
 const STUDENT_PAGE_SIZE = 25;
 
@@ -182,6 +183,27 @@ export const StudentDirectory: React.FC = () => {
     fatherName: '',
   });
 
+  const isAddStudentDirty = showAddModal && (
+    formData.name.trim() !== '' ||
+    formData.phone.trim() !== '' ||
+    formData.email.trim() !== '' ||
+    formData.fatherName.trim() !== '' ||
+    formData.tuitionFeeAmount > 0 ||
+    formData.initialPayment > 0 ||
+    isSubmitting
+  );
+  useTrackDirtyForm('student-admission', isAddStudentDirty, 'Student admission form');
+
+  const isEditStudentDirty = showEditModal && editingStudent !== null && (
+    editFormData.name !== (editingStudent.name || '') ||
+    editFormData.phone !== (editingStudent.parent?.phone || editingStudent.phone || '') ||
+    editFormData.email !== (editingStudent.parent?.email || editingStudent.email || '') ||
+    editFormData.fatherName !== (editingStudent.parent?.fatherName || editingStudent.parentName || '') ||
+    editFormData.class !== (editingStudent.class || '') ||
+    editFormData.batch !== (editingStudent.batch || '')
+  );
+  useTrackDirtyForm('student-edit', Boolean(isEditStudentDirty), 'Student profile edit');
+
   const handleOpenAddModal = () => {
     setFormData({
       ...initialStudentFormData,
@@ -325,6 +347,20 @@ export const StudentDirectory: React.FC = () => {
   const handleAddStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (formData.initialPayment < 0) {
+      showToast('Initial payment cannot be negative', 'error');
+      return;
+    }
+    if (formData.tuitionFeeAmount < 0) {
+      showToast('Tuition fee amount cannot be negative', 'error');
+      return;
+    }
+    if (formData.initialPayment > formData.tuitionFeeAmount) {
+      showToast('Initial payment cannot exceed the tuition fee charge', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
     const studentName = formData.name;
     try {

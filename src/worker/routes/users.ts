@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson, syncIdentity, Role } from '../middleware';
+import { Env, authenticateInstitution, readJson, syncIdentity, Role, parsePageParameter } from '../middleware';
 import { getAuth, AuthEnv } from '../auth';
 import { hashPassword, generateRandomString } from 'better-auth/crypto';
 
@@ -25,6 +25,19 @@ usersRouter.get('/:institutionId/users', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
+  const page = parsePageParameter(c.req.query('page'), 1, 1_000_000);
+  const limit = parsePageParameter(c.req.query('limit'), 100, 200);
+  if (page === null || limit === null) {
+    return c.json({ error: 'Invalid pagination parameters' }, 400);
+  }
+  const offset = (page - 1) * limit;
+
+  const countRow = await DB.prepare(
+    `SELECT COUNT(*) AS total FROM memberships WHERE institution_id = ? AND deleted_at IS NULL`
+  ).bind(instId).first<{ total: number }>();
+  const total = countRow?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
   // Query memberships with user identity and profile joins
   const raw = await DB.prepare(
     `SELECT m.id AS membership_id, m.role, m.status, m.created_at,
@@ -38,9 +51,10 @@ usersRouter.get('/:institutionId/users', async (c) => {
      LEFT JOIN teachers t ON t.institution_id = m.institution_id AND t.membership_id = m.id AND t.status = 'active'
      LEFT JOIN guardians g ON g.institution_id = m.institution_id AND g.membership_id = m.id AND g.status = 'active'
      WHERE m.institution_id = ? AND m.deleted_at IS NULL
-     ORDER BY m.created_at ASC`
+     ORDER BY m.created_at ASC, m.id ASC
+     LIMIT ? OFFSET ?`
   )
-    .bind(instId)
+    .bind(instId, limit, offset)
     .all<{
       membership_id: string;
       role: Role;
@@ -57,20 +71,28 @@ usersRouter.get('/:institutionId/users', async (c) => {
       guardian_phone: string | null;
     }>();
 
-  // Fetch teacher assignments for all teachers in this institution
-  const teacherAssignmentsRaw = await DB.prepare(
-    `SELECT ta.teacher_id, c.name AS class_name, b.name AS batch_name, s.name AS subject_name
-     FROM teacher_assignments ta
-     JOIN classes c ON c.id = ta.class_id
-     LEFT JOIN batches b ON b.id = ta.batch_id
-     JOIN subjects s ON s.id = ta.subject_id
-     WHERE ta.institution_id = ? AND ta.status = 'active'`
-  )
-    .bind(instId)
-    .all<{ teacher_id: string; class_name: string; batch_name: string | null; subject_name: string }>();
+  const teacherIds = raw.results.map((u) => u.teacher_id).filter((id): id is string => Boolean(id));
+  const guardianIds = raw.results.map((u) => u.guardian_id).filter((id): id is string => Boolean(id));
+
+  // Fetch teacher assignments only for the teachers on this page
+  let teacherAssignmentsResults: Array<{ teacher_id: string; class_name: string; batch_name: string | null; subject_name: string }> = [];
+  if (teacherIds.length > 0) {
+    const placeholders = teacherIds.map(() => '?').join(', ');
+    const teacherAssignmentsRaw = await DB.prepare(
+      `SELECT ta.teacher_id, c.name AS class_name, b.name AS batch_name, s.name AS subject_name
+       FROM teacher_assignments ta
+       JOIN classes c ON c.id = ta.class_id
+       LEFT JOIN batches b ON b.id = ta.batch_id
+       JOIN subjects s ON s.id = ta.subject_id
+       WHERE ta.institution_id = ? AND ta.status = 'active' AND ta.teacher_id IN (${placeholders})`
+    )
+      .bind(instId, ...teacherIds)
+      .all<{ teacher_id: string; class_name: string; batch_name: string | null; subject_name: string }>();
+    teacherAssignmentsResults = teacherAssignmentsRaw.results;
+  }
 
   const teacherAssignmentsMap = new Map<string, string[]>();
-  for (const ta of teacherAssignmentsRaw.results) {
+  for (const ta of teacherAssignmentsResults) {
     const list = teacherAssignmentsMap.get(ta.teacher_id) || [];
     const desc = ta.batch_name
       ? `${ta.class_name} (${ta.batch_name} - ${ta.subject_name})`
@@ -79,21 +101,26 @@ usersRouter.get('/:institutionId/users', async (c) => {
     teacherAssignmentsMap.set(ta.teacher_id, list);
   }
 
-  // Fetch linked children for all guardians in this institution
-  const guardianChildrenRaw = await DB.prepare(
-    `SELECT sg.guardian_id, s.id AS student_id, s.first_name, s.last_name, c.name AS class_name, b.name AS batch_name
-     FROM student_guardians sg
-     JOIN students s ON s.id = sg.student_id AND s.institution_id = sg.institution_id
-     LEFT JOIN enrollments e ON e.student_id = s.id AND e.institution_id = s.institution_id AND e.status = 'active'
-     LEFT JOIN classes c ON c.id = e.class_id
-     LEFT JOIN batches b ON b.id = e.batch_id
-     WHERE sg.institution_id = ? AND sg.portal_access = 1 AND s.deleted_at IS NULL`
-  )
-    .bind(instId)
-    .all<{ guardian_id: string; student_id: string; first_name: string; last_name: string | null; class_name: string | null; batch_name: string | null }>();
+  // Fetch linked children only for the guardians on this page
+  let guardianChildrenResults: Array<{ guardian_id: string; student_id: string; first_name: string; last_name: string | null; class_name: string | null; batch_name: string | null }> = [];
+  if (guardianIds.length > 0) {
+    const placeholders = guardianIds.map(() => '?').join(', ');
+    const guardianChildrenRaw = await DB.prepare(
+      `SELECT sg.guardian_id, s.id AS student_id, s.first_name, s.last_name, c.name AS class_name, b.name AS batch_name
+       FROM student_guardians sg
+       JOIN students s ON s.id = sg.student_id AND s.institution_id = sg.institution_id
+       LEFT JOIN enrollments e ON e.student_id = s.id AND e.institution_id = s.institution_id AND e.status = 'active'
+       LEFT JOIN classes c ON c.id = e.class_id
+       LEFT JOIN batches b ON b.id = e.batch_id
+       WHERE sg.institution_id = ? AND sg.portal_access = 1 AND s.deleted_at IS NULL AND sg.guardian_id IN (${placeholders})`
+    )
+      .bind(instId, ...guardianIds)
+      .all<{ guardian_id: string; student_id: string; first_name: string; last_name: string | null; class_name: string | null; batch_name: string | null }>();
+    guardianChildrenResults = guardianChildrenRaw.results;
+  }
 
   const guardianChildrenMap = new Map<string, { id: string; name: string; class: string }[]>();
-  for (const gc of guardianChildrenRaw.results) {
+  for (const gc of guardianChildrenResults) {
     const list = guardianChildrenMap.get(gc.guardian_id) || [];
     const childName = `${gc.first_name} ${gc.last_name || ''}`.trim();
     list.push({
@@ -103,6 +130,7 @@ usersRouter.get('/:institutionId/users', async (c) => {
     });
     guardianChildrenMap.set(gc.guardian_id, list);
   }
+
 
   const users = raw.results.map((u, idx) => {
     let roleLabel: 'Admin' | 'Teacher' | 'Parent' = 'Admin';
@@ -152,7 +180,7 @@ usersRouter.get('/:institutionId/users', async (c) => {
     };
   });
 
-  return c.json({ users });
+  return c.json({ users, total, totalPages, page, limit });
 });
 
 // ---------------------------------------------------------------------------

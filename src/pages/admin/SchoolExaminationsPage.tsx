@@ -29,6 +29,7 @@ import {
   getStoredSchoolExamMarks,
   getStoredStudents
 } from '../../utils/storage';
+import { useTrackDirtyForm } from '../../pwa/updateSafety';
 
 interface StudentMarkEntry {
   id: string;
@@ -73,6 +74,12 @@ export const SchoolExaminationsPage: React.FC = () => {
     startDate: '2026-11-10',
     endDate: '2026-11-20'
   });
+
+  const isMarksDirty = (!isSaved && studentMarks.length > 0 && studentMarks.some(s => s.marks !== '')) || isSavingMarks;
+  useTrackDirtyForm('school-exam-marks', isMarksDirty, 'School examination marks');
+
+  const isCreateExamDirty = showCreateModal && (newExamData.name.trim() !== '' || isSubmitting);
+  useTrackDirtyForm('school-exam-create', isCreateExamDirty, 'School examination creation');
 
   useEffect(() => {
     if (!activeInstitutionId) return;
@@ -127,58 +134,35 @@ export const SchoolExaminationsPage: React.FC = () => {
         return;
       }
       setIsLoading(true);
+      setLoadError(null);
       try {
         const res = await api.assessments.getMarks(activeInstitutionId, selectedExamId);
-        if (!isCancelled && res && res.marks && res.marks.length > 0) {
-          const mapped: StudentMarkEntry[] = res.marks.map((m: any) => ({
-            id: m.studentId,
-            name: m.studentName,
-            rollNo: m.rollNo,
-            avatar: m.avatar,
-            marks: m.marks !== null && m.marks !== undefined ? m.marks : '',
-            maxMarks: m.maxMarks || 100,
-            remarks: m.remarks || ''
-          }));
-          setStudentMarks(mapped);
-          setIsSaved(true);
-          return;
+        if (!isCancelled) {
+          if (res && res.marks) {
+            const mapped: StudentMarkEntry[] = res.marks.map((m: any) => ({
+              id: m.studentId,
+              name: m.studentName,
+              rollNo: m.rollNo,
+              avatar: m.avatar,
+              marks: m.marks !== null && m.marks !== undefined ? m.marks : '',
+              maxMarks: m.maxMarks || 100,
+              remarks: m.remarks || ''
+            }));
+            setStudentMarks(mapped);
+            setIsSaved(true);
+          } else {
+            setStudentMarks([]);
+            setIsSaved(false);
+          }
+          setIsLoading(false);
         }
-      } catch {
-        // Fallback to local storage if API call fails
-      }
-
-      const allMarks = getStoredSchoolExamMarks();
-      const storageKey = `${selectedExamId}_${selectedClass}_${selectedSubject}`;
-      const savedForSession = allMarks[storageKey];
-
-      if (!isCancelled) {
-        if (savedForSession && savedForSession.length > 0) {
-          const mapped: StudentMarkEntry[] = savedForSession.map(m => ({
-            id: m.studentId,
-            name: m.studentName || 'Student',
-            rollNo: m.rollNo || '',
-            avatar: '',
-            marks: typeof m.marks === 'number' ? m.marks : '',
-            maxMarks: m.maxMarks || maxMarks,
-            remarks: m.remarks || ''
-          }));
-          setStudentMarks(mapped);
-          setIsSaved(true);
-        } else {
-          const enrolled = getStoredStudents();
-          const blankMarks: StudentMarkEntry[] = enrolled.map(st => ({
-            id: st.id,
-            name: st.name,
-            rollNo: st.rollNo,
-            avatar: st.avatar,
-            marks: '',
-            maxMarks,
-            remarks: ''
-          }));
-          setStudentMarks(blankMarks);
+      } catch (err) {
+        if (!isCancelled) {
+          setLoadError(err instanceof Error ? err.message : 'Failed to load assessment marks');
+          setStudentMarks([]);
           setIsSaved(false);
+          setIsLoading(false);
         }
-        setIsLoading(false);
       }
     };
 

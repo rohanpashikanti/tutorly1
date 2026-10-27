@@ -4,6 +4,10 @@ import {
   authenticateInstitution,
   readJson,
   extractIdempotencyKey,
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  MAX_PAGE_NUMBER,
+  parsePageParameter,
 } from '../middleware';
 
 export const feesRouter = new Hono<{ Bindings: Env }>();
@@ -13,8 +17,17 @@ async function fingerprintPaymentRequest(payload: {
   amountPaise: number;
   method: string;
   notes: string | null;
+  paymentDate?: string | null;
+  externalReference?: string | null;
 }): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    studentId: payload.studentId,
+    amountPaise: payload.amountPaise,
+    method: payload.method,
+    notes: payload.notes ?? null,
+    paymentDate: payload.paymentDate ?? null,
+    externalReference: payload.externalReference ?? null,
+  }));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -64,45 +77,130 @@ feesRouter.get('/:institutionId/fees/records', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
-  // Query each student's fee summary
+  const page = parsePageParameter(c.req.query('page'), 1, MAX_PAGE_NUMBER);
+  const limit = parsePageParameter(c.req.query('limit'), DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+  if (page === null || limit === null) {
+    return c.json({ error: 'Invalid pagination parameters' }, 400);
+  }
+  const offset = (page - 1) * limit;
+
+  // Calculate full-institution fee summary aggregate directly in SQL
+  const summaryRaw = await DB.prepare(
+    `WITH student_charges AS (
+       SELECT student_id,
+              SUM(amount_paise) AS total_charges_paise
+       FROM fee_charges
+       WHERE institution_id = ? AND status NOT IN ('waived', 'void')
+       GROUP BY student_id
+     ),
+     student_paid AS (
+       SELECT student_id,
+              SUM(amount_paise) AS total_paid_paise
+       FROM payment_allocations
+       WHERE institution_id = ?
+       GROUP BY student_id
+     ),
+     student_fee_status AS (
+       SELECT s.id AS student_id,
+              COALESCE(NULLIF(sc.total_charges_paise, 0), fa.agreed_amount_paise, 0) AS total_charges_paise,
+              COALESCE(sp.total_paid_paise, 0) AS total_paid_paise
+       FROM students s
+       LEFT JOIN student_fee_assignments fa ON fa.student_id = s.id AND fa.institution_id = s.institution_id AND fa.status = 'active'
+       LEFT JOIN student_charges sc ON sc.student_id = s.id
+       LEFT JOIN student_paid sp ON sp.student_id = s.id
+       WHERE s.institution_id = ? AND s.deleted_at IS NULL
+     )
+     SELECT
+       COUNT(*) AS total_students,
+       COALESCE(SUM(total_charges_paise), 0) AS total_assigned_paise,
+       COALESCE(SUM(total_paid_paise), 0) AS total_paid_paise,
+       COALESCE(SUM(CASE WHEN total_charges_paise <= total_paid_paise THEN 1 ELSE 0 END), 0) AS fully_paid_count,
+       COALESCE(SUM(CASE WHEN total_paid_paise = 0 THEN 1 ELSE 0 END), 0) AS unpaid_count,
+       COALESCE(SUM(CASE WHEN total_paid_paise > 0 AND total_paid_paise < total_charges_paise THEN 1 ELSE 0 END), 0) AS partial_count
+     FROM student_fee_status`
+  )
+    .bind(instId, instId, instId)
+    .first<{
+      total_students: number;
+      total_assigned_paise: number;
+      total_paid_paise: number;
+      fully_paid_count: number;
+      unpaid_count: number;
+      partial_count: number;
+    }>();
+
+  const total = summaryRaw?.total_students ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const totalAssigned = Math.round((summaryRaw?.total_assigned_paise ?? 0) / 100);
+  const totalCollected = Math.round((summaryRaw?.total_paid_paise ?? 0) / 100);
+  const totalOutstanding = Math.max(0, totalAssigned - totalCollected);
+
+  // Paginated students query with CTEs eliminating N+1 correlated scalar subqueries
   const query = `
+    WITH latest_payments AS (
+      SELECT student_id, receipt_no, method, received_at, external_reference,
+             ROW_NUMBER() OVER (
+               PARTITION BY student_id
+               ORDER BY received_at DESC, created_at DESC, id DESC
+             ) AS rn
+
+      FROM payments
+      WHERE institution_id = ?
+    ),
+    student_charges AS (
+      SELECT student_id,
+             SUM(amount_paise) AS total_charges_paise,
+             MIN(CASE WHEN status IN ('open', 'partial') THEN due_on ELSE NULL END) AS earliest_due
+      FROM fee_charges
+      WHERE institution_id = ? AND status NOT IN ('waived', 'void')
+      GROUP BY student_id
+    ),
+    student_paid AS (
+      SELECT student_id,
+             SUM(amount_paise) AS total_paid_paise
+      FROM payment_allocations
+      WHERE institution_id = ?
+      GROUP BY student_id
+    )
     SELECT s.id AS student_id, s.first_name, s.last_name, s.avatar_url,
            c.name AS class_name,
            COALESCE(fa.description, 'Annual Tuition Fee') AS fee_plan_name,
-           COALESCE(NULLIF(SUM(fc.amount_paise), 0), fa.agreed_amount_paise, 0) AS total_charges_paise,
-           COALESCE((
-             SELECT SUM(pa.amount_paise)
-             FROM payment_allocations pa
-             WHERE pa.student_id = s.id AND pa.institution_id = s.institution_id
-           ), 0) AS total_paid_paise,
-           MIN(CASE WHEN fc.status IN ('open', 'partial') THEN fc.due_on ELSE NULL END) AS earliest_due,
-           (SELECT p.receipt_no FROM payments p WHERE p.student_id = s.id AND p.institution_id = s.institution_id ORDER BY p.received_at DESC LIMIT 1) AS last_receipt_no,
-           (SELECT p.method FROM payments p WHERE p.student_id = s.id AND p.institution_id = s.institution_id ORDER BY p.received_at DESC LIMIT 1) AS last_method,
-           (SELECT p.received_at FROM payments p WHERE p.student_id = s.id AND p.institution_id = s.institution_id ORDER BY p.received_at DESC LIMIT 1) AS last_payment_date
+           COALESCE(NULLIF(sc.total_charges_paise, 0), fa.agreed_amount_paise, 0) AS total_charges_paise,
+           COALESCE(sp.total_paid_paise, 0) AS total_paid_paise,
+           sc.earliest_due,
+           lp.receipt_no AS last_receipt_no,
+           lp.method AS last_method,
+           lp.received_at AS last_payment_date,
+           lp.external_reference AS last_external_reference
     FROM students s
     LEFT JOIN enrollments e ON e.student_id = s.id AND e.institution_id = s.institution_id AND e.status = 'active'
     LEFT JOIN classes c ON c.id = e.class_id
     LEFT JOIN student_fee_assignments fa ON fa.student_id = s.id AND fa.institution_id = s.institution_id AND fa.status = 'active'
-    LEFT JOIN fee_charges fc ON fc.student_id = s.id AND fc.institution_id = s.institution_id AND fc.status NOT IN ('waived', 'void')
+    LEFT JOIN student_charges sc ON sc.student_id = s.id
+    LEFT JOIN student_paid sp ON sp.student_id = s.id
+    LEFT JOIN latest_payments lp ON lp.student_id = s.id AND lp.rn = 1
     WHERE s.institution_id = ? AND s.deleted_at IS NULL
-    GROUP BY s.id, s.first_name, s.last_name, s.avatar_url, c.name, fa.description, fa.agreed_amount_paise
-    ORDER BY s.roll_no, s.first_name
+    ORDER BY s.roll_no, s.first_name, s.id
+    LIMIT ? OFFSET ?
   `;
 
-  const raw = await DB.prepare(query).bind(instId).all<{
-    student_id: string;
-    first_name: string;
-    last_name: string | null;
-    avatar_url: string | null;
-    class_name: string | null;
-    fee_plan_name: string;
-    total_charges_paise: number;
-    total_paid_paise: number;
-    earliest_due: string | null;
-    last_receipt_no: string | null;
-    last_method: string | null;
-    last_payment_date: string | null;
-  }>();
+  const raw = await DB.prepare(query)
+    .bind(instId, instId, instId, instId, limit, offset)
+    .all<{
+      student_id: string;
+      first_name: string;
+      last_name: string | null;
+      avatar_url: string | null;
+      class_name: string | null;
+      fee_plan_name: string;
+      total_charges_paise: number;
+      total_paid_paise: number;
+      earliest_due: string | null;
+      last_receipt_no: string | null;
+      last_method: string | null;
+      last_payment_date: string | null;
+      last_external_reference: string | null;
+    }>();
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const records = raw.results.map((r, idx) => {
@@ -147,13 +245,29 @@ feesRouter.get('/:institutionId/fees/records', async (c) => {
       paymentMethod: mappedMethod,
       paymentDate: r.last_payment_date ? r.last_payment_date.slice(0, 10) : undefined,
       transactionId: r.last_receipt_no ? `TXN-${r.last_receipt_no.slice(-6)}` : undefined,
+      externalReference: r.last_external_reference || undefined,
       status,
       receiptNo: r.last_receipt_no || undefined,
     };
   });
 
-  return c.json({ records });
+  return c.json({
+    records,
+    total,
+    totalPages,
+    page,
+    limit,
+    summary: {
+      totalAssigned,
+      totalCollected,
+      totalOutstanding,
+      fullyPaidCount: summaryRaw?.fully_paid_count ?? 0,
+      unpaidCount: summaryRaw?.unpaid_count ?? 0,
+      partialCount: summaryRaw?.partial_count ?? 0,
+    },
+  });
 });
+
 
 feesRouter.post('/:institutionId/fees/payments', async (c) => {
   const auth = await authenticateInstitution(c, ['owner', 'admin']);
@@ -194,9 +308,76 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
     return c.json({ error: 'Payment amount must be a valid positive amount in paise' }, 400);
   }
 
+  // Validate paymentDate (optional YYYY-MM-DD, cannot be in future, cannot be earlier than 2000-01-01)
+  const rawDate = body.paymentDate;
+  let paymentDate: string | null = null;
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  if (rawDate !== undefined && rawDate !== null) {
+    if (typeof rawDate !== 'string') {
+      return c.json({ error: 'Payment date must be a valid YYYY-MM-DD string' }, 400);
+    }
+    const trimmedDate = rawDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      return c.json({ error: 'Payment date must be in YYYY-MM-DD format' }, 400);
+    }
+    const [year, month, day] = trimmedDate.split('-').map(Number);
+    const parsedDate = new Date(Date.UTC(year, month - 1, day));
+    if (
+      isNaN(parsedDate.getTime()) ||
+      parsedDate.getUTCFullYear() !== year ||
+      parsedDate.getUTCMonth() !== month - 1 ||
+      parsedDate.getUTCDate() !== day
+    ) {
+      return c.json({ error: 'Invalid calendar date for payment date' }, 400);
+    }
+    if (trimmedDate > todayStr) {
+      return c.json({ error: 'Payment date cannot be in the future' }, 400);
+    }
+    if (trimmedDate < '2000-01-01') {
+      return c.json({ error: 'Payment date cannot be earlier than year 2000' }, 400);
+    }
+    paymentDate = trimmedDate;
+  }
+  const effectiveDate = paymentDate || todayStr;
+  const receivedAtIso = effectiveDate === todayStr
+    ? new Date().toISOString()
+    : `${effectiveDate}T12:00:00.000Z`;
+
+  // Validate externalReference (optional string, max 100 chars, no control chars)
+  const rawRef = body.externalReference !== undefined ? body.externalReference : body.reference;
+  let externalReference: string | null = null;
+  if (rawRef !== undefined && rawRef !== null) {
+    if (typeof rawRef !== 'string') {
+      return c.json({ error: 'External reference must be a string' }, 400);
+    }
+    const trimmedRef = rawRef.trim();
+    if (trimmedRef) {
+      const hasControl = Array.from(trimmedRef).some((ch) => {
+        const cp = ch.charCodeAt(0);
+        return cp < 0x20 || cp === 0x7f;
+      });
+      if (hasControl) {
+        return c.json({ error: 'External reference contains invalid characters' }, 400);
+      }
+      if (trimmedRef.length > 100) {
+        return c.json({ error: 'External reference cannot exceed 100 characters' }, 400);
+      }
+      externalReference = trimmedRef;
+    }
+  }
+
   const { DB } = c.env;
   const instId = auth.institutionId;
-  const requestHash = await fingerprintPaymentRequest({ studentId, amountPaise: totalPaise, method, notes });
+
+  const requestHash = await fingerprintPaymentRequest({
+    studentId,
+    amountPaise: totalPaise,
+    method,
+    notes,
+    paymentDate,
+    externalReference,
+  });
   // The existing table has institution-wide uniqueness; namespacing the stored key scopes
   // this payment operation to the authenticated membership without changing other callers.
   const scopedKey = `fee-payment:${auth.membership.id}:${idempotencyKey}`;
@@ -222,6 +403,15 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
     return c.json({ error: 'Payment request is still being resolved; retry with the same key and details' }, 503);
   }
 
+  if (externalReference) {
+    const existingRef = await DB.prepare(
+      `SELECT id FROM payments WHERE institution_id = ? AND external_reference = ? LIMIT 1`
+    ).bind(instId, externalReference).first<{ id: string }>();
+    if (existingRef) {
+      return c.json({ error: `External reference '${externalReference}' has already been recorded for this institution` }, 409);
+    }
+  }
+
   const student = await DB.prepare(
     `SELECT first_name, last_name FROM students WHERE id = ? AND institution_id = ? AND deleted_at IS NULL`
   ).bind(studentId, instId).first<{ first_name: string; last_name: string | null }>();
@@ -231,7 +421,7 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
   const recentDuplicate = await DB.prepare(
     `SELECT id, receipt_no FROM payments
      WHERE institution_id = ? AND student_id = ? AND amount_paise = ?
-       AND received_at >= datetime('now', '-5 seconds')
+       AND (created_at >= datetime('now', '-5 seconds') OR received_at >= datetime('now', '-5 seconds'))
      LIMIT 1`
   ).bind(instId, studentId, totalPaise).first<{ id: string; receipt_no: string }>();
   if (recentDuplicate) {
@@ -250,8 +440,14 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
      ORDER BY fc.due_on ASC, fc.id ASC`
   ).bind(studentId, instId).all<{ id: string; amount_paise: number; paid_paise: number }>();
 
+  // Fetch configured institution fee receipt prefix if available
+  const instSettings = await DB.prepare(
+    `SELECT fee_receipt_prefix FROM institution_settings WHERE institution_id = ?`
+  ).bind(instId).first<{ fee_receipt_prefix: string | null }>();
+  const receiptPrefix = (instSettings?.fee_receipt_prefix && instSettings.fee_receipt_prefix.trim()) || 'REC-2026-';
+
   const paymentId = `pmt-${crypto.randomUUID().slice(0, 8)}`;
-  const receiptNo = `REC-2026-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+  const receiptNo = `${receiptPrefix}${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
   const responseBody = {
     success: true,
     message: 'Payment recorded and allocated successfully',
@@ -259,6 +455,8 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
     receiptNo,
     amount: totalPaise / 100,
     studentName: `${student.first_name} ${student.last_name || ''}`.trim(),
+    paymentDate: effectiveDate,
+    externalReference: externalReference || undefined,
   };
   const expiresAt = '9999-12-31T23:59:59.999Z';
   const statements = [
@@ -269,9 +467,9 @@ feesRouter.post('/:institutionId/fees/payments', async (c) => {
     DB.prepare(
       `INSERT INTO payments (
          id, institution_id, student_id, amount_paise, currency_code, method,
-         receipt_no, status, received_at, recorded_by_membership_id, notes
-       ) VALUES (?, ?, ?, ?, 'INR', ?, ?, 'received', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)`
-    ).bind(paymentId, instId, studentId, totalPaise, method, receiptNo, auth.membership.id, notes),
+         receipt_no, external_reference, status, received_at, recorded_by_membership_id, notes
+       ) VALUES (?, ?, ?, ?, 'INR', ?, ?, ?, 'received', ?, ?, ?)`
+    ).bind(paymentId, instId, studentId, totalPaise, method, receiptNo, externalReference, receivedAtIso, auth.membership.id, notes),
   ];
 
   let remainingPaise = totalPaise;
@@ -342,25 +540,45 @@ feesRouter.get('/:institutionId/fees/payments', async (c) => {
   const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
-  const raw = await c.env.DB.prepare(
-    `SELECT p.id, p.student_id, p.amount_paise, p.method, p.receipt_no, p.status, p.received_at, p.notes,
+  const { DB } = c.env;
+  const instId = auth.institutionId;
+
+  const page = parsePageParameter(c.req.query('page'), 1, MAX_PAGE_NUMBER);
+  const limit = parsePageParameter(c.req.query('limit'), DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+  if (page === null || limit === null) {
+    return c.json({ error: 'Invalid pagination parameters' }, 400);
+  }
+  const offset = (page - 1) * limit;
+
+  const countRow = await DB.prepare(
+    `SELECT COUNT(*) AS total FROM payments WHERE institution_id = ?`
+  ).bind(instId).first<{ total: number }>();
+  const total = countRow?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  const raw = await DB.prepare(
+    `SELECT p.id, p.student_id, p.amount_paise, p.method, p.receipt_no, p.external_reference,
+            p.status, p.received_at, p.created_at, p.notes,
             s.first_name, s.last_name, c.name AS class_name
      FROM payments p
      JOIN students s ON s.id = p.student_id
      LEFT JOIN enrollments e ON e.student_id = s.id AND e.status = 'active'
      LEFT JOIN classes c ON c.id = e.class_id
      WHERE p.institution_id = ?
-     ORDER BY p.received_at DESC`
+     ORDER BY p.received_at DESC, p.created_at DESC, p.id DESC
+     LIMIT ? OFFSET ?`
   )
-    .bind(auth.institutionId)
+    .bind(instId, limit, offset)
     .all<{
       id: string;
       student_id: string;
       amount_paise: number;
       method: string;
       receipt_no: string;
+      external_reference: string | null;
       status: string;
       received_at: string;
+      created_at: string;
       notes: string | null;
       first_name: string;
       last_name: string | null;
@@ -370,18 +588,22 @@ feesRouter.get('/:institutionId/fees/payments', async (c) => {
   const payments = raw.results.map((p) => ({
     id: p.id,
     receiptNo: p.receipt_no,
+    externalReference: p.external_reference || undefined,
     studentId: p.student_id,
     studentName: `${p.first_name} ${p.last_name || ''}`.trim(),
     class: p.class_name || 'Unassigned',
     amount: Math.round(p.amount_paise / 100),
     method: p.method.toUpperCase(),
     date: p.received_at.slice(0, 10),
+    receivedAt: p.received_at,
+    createdAt: p.created_at,
     status: p.status === 'received' ? 'Received' : p.status,
     notes: p.notes || '',
   }));
 
-  return c.json({ payments });
+  return c.json({ payments, total, totalPages, page, limit });
 });
+
 
 feesRouter.get('/:institutionId/fees/reports', async (c) => {
   const auth = await authenticateInstitution(c, ['owner', 'admin']);

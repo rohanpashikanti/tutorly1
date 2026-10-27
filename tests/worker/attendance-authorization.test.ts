@@ -98,6 +98,64 @@ const postAttendance = (institutionId: string, cookie: string | null, payload: R
   },
 );
 
+const getAttendanceRegister = (institutionId: string, cookie: string | null, params: Record<string, string>) => {
+  const q = new URLSearchParams(params);
+  return request(
+    `/api/institutions/${institutionId}/attendance/register?${q.toString()}`,
+    {
+      method: 'GET',
+      headers: { ...(cookie ? { cookie } : {}), origin: 'http://localhost:5173' },
+    },
+  );
+};
+
+const getAttendanceReports = (institutionId: string, cookie: string | null, params?: Record<string, string>) => {
+  const q = params ? `?${new URLSearchParams(params).toString()}` : '';
+  return request(
+    `/api/institutions/${institutionId}/attendance/reports${q}`,
+    {
+      method: 'GET',
+      headers: { ...(cookie ? { cookie } : {}), origin: 'http://localhost:5173' },
+    },
+  );
+};
+
+async function provisionAdmin(ownerCookie: string, institutionId: string) {
+  const email = `${unique('admin')}@example.test`;
+  const response = await request(`/api/institutions/${institutionId}/users`, {
+    method: 'POST',
+    headers: { cookie: ownerCookie, origin: 'http://localhost:5173', 'content-type': 'application/json', 'x-institution-id': institutionId },
+    body: JSON.stringify({ name: 'Synthetic Admin', email, role: 'admin' }),
+  });
+  expect(response.status).toBe(201);
+  const provisioned = await response.json() as { temporaryPassword: string };
+  const login = await request('/api/auth/sign-in/email', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: 'http://localhost:5173', 'cf-connecting-ip': `198.51.100.${(sequence % 240) + 1}` },
+    body: JSON.stringify({ email, password: provisioned.temporaryPassword }),
+  });
+  expect(login.status).toBe(200);
+  return { cookie: cookieFrom(login) };
+}
+
+async function provisionParent(ownerCookie: string, institutionId: string, studentIds: string[]) {
+  const email = `${unique('parent')}@example.test`;
+  const response = await request(`/api/institutions/${institutionId}/users`, {
+    method: 'POST',
+    headers: { cookie: ownerCookie, origin: 'http://localhost:5173', 'content-type': 'application/json', 'x-institution-id': institutionId },
+    body: JSON.stringify({ name: 'Synthetic Parent', email, role: 'parent', studentIds }),
+  });
+  expect(response.status).toBe(201);
+  const provisioned = await response.json() as { temporaryPassword: string };
+  const login = await request('/api/auth/sign-in/email', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: 'http://localhost:5173', 'cf-connecting-ip': `198.51.100.${(sequence % 240) + 1}` },
+    body: JSON.stringify({ email, password: provisioned.temporaryPassword }),
+  });
+  expect(login.status).toBe(200);
+  return { cookie: cookieFrom(login) };
+}
+
 async function attendanceCounts(institutionId: string, date: string) {
   return db.prepare(
     `SELECT COUNT(DISTINCT s.id) AS sessions, COUNT(ar.id) AS records
@@ -223,5 +281,250 @@ describe('attendance authorization', () => {
     expect(admin.status).toBe(200);
     const row = await db.prepare(`SELECT status FROM attendance_records WHERE student_id = ?`).bind(fixture.studentA).first<{ status: string }>();
     expect(row?.status).toBe('excused');
+  });
+
+  it('allows authorized owner and admin to read attendance register scoped to class and batch', async () => {
+    const owner = await register();
+    const institutionId = await createInstitution(owner.cookie);
+    const fixture = await createAcademicFixture(institutionId);
+    const admin = await provisionAdmin(owner.cookie, institutionId);
+
+    // 1. Owner can read register for classA / batchA
+    const ownerRes = await getAttendanceRegister(institutionId, owner.cookie, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(ownerRes.status).toBe(200);
+    const ownerData = await ownerRes.json() as { records: any[]; isSubmitted: boolean };
+    expect(ownerData.records).toHaveLength(1);
+    expect(ownerData.records[0].studentId).toBe(fixture.studentA);
+    // Student B belongs to classB / batchB and must not appear
+    expect(ownerData.records.some((r) => r.studentId === fixture.studentB)).toBe(false);
+
+    // 2. Admin can read register for classA / batchA
+    const adminRes = await getAttendanceRegister(institutionId, admin.cookie, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(adminRes.status).toBe(200);
+    const adminData = await adminRes.json() as { records: any[] };
+    expect(adminData.records).toHaveLength(1);
+    expect(adminData.records[0].studentId).toBe(fixture.studentA);
+  });
+
+  it('allows assigned teacher to read permitted class/batch, but denies unassigned class, batch, and unassigned teacher', async () => {
+    const owner = await register();
+    const institutionId = await createInstitution(owner.cookie);
+    const fixture = await createAcademicFixture(institutionId);
+    const assignedTeacher = await provisionTeacher(owner.cookie, institutionId, [
+      { classId: fixture.classA, batchId: fixture.batchA, subjectId: fixture.subjectId },
+    ]);
+    const unassignedTeacher = await provisionTeacher(owner.cookie, institutionId, []);
+
+    // 1. Assigned teacher can read their assigned class and batch
+    const allowed = await getAttendanceRegister(institutionId, assignedTeacher.cookie, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(allowed.status).toBe(200);
+    const data = await allowed.json() as { records: any[] };
+    expect(data.records).toHaveLength(1);
+    expect(data.records[0].studentId).toBe(fixture.studentA);
+
+    // 2. Assigned teacher is rejected when requesting an unassigned class (Other Class)
+    const unassignedClass = await getAttendanceRegister(institutionId, assignedTeacher.cookie, {
+      class: 'Other Class',
+      batch: 'Other Batch',
+      date: '2026-10-27',
+    });
+    expect(unassignedClass.status).toBe(403);
+    const unassignedClassBody = await unassignedClass.json() as { error: string };
+    expect(unassignedClassBody.error).toMatch(/not authorized/i);
+
+    // 3. Assigned teacher is rejected when requesting an unassigned batch (Other Batch in Authorized Class)
+    const unassignedBatch = await getAttendanceRegister(institutionId, assignedTeacher.cookie, {
+      class: 'Authorized Class',
+      batch: 'Other Batch',
+      date: '2026-10-27',
+    });
+    expect(unassignedBatch.status).toBe(403);
+
+    // 4. Unassigned teacher (0 assignments) is rejected for any class/batch
+    const unassignedAttempt = await getAttendanceRegister(institutionId, unassignedTeacher.cookie, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(unassignedAttempt.status).toBe(403);
+  });
+
+  it('denies parent, unauthenticated callers, and outsiders from accessing class register', async () => {
+    const owner = await register();
+    const institutionId = await createInstitution(owner.cookie);
+    const foreignOwner = await register();
+    const foreignInstitutionId = await createInstitution(foreignOwner.cookie);
+    const fixture = await createAcademicFixture(institutionId);
+
+    const parent = await provisionParent(owner.cookie, institutionId, [fixture.studentA]);
+
+    // 1. Parent is rejected with 403
+    const parentRes = await getAttendanceRegister(institutionId, parent.cookie, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(parentRes.status).toBe(403);
+    const parentBody = await parentRes.json() as { error: string };
+    expect(parentBody.error).toMatch(/forbidden|privileges/i);
+
+    // 2. Unauthenticated caller is rejected with 401
+    const anonRes = await getAttendanceRegister(institutionId, null, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(anonRes.status).toBe(401);
+
+    // 3. Member of foreign institution is rejected with 403
+    const foreignRes = await getAttendanceRegister(institutionId, foreignOwner.cookie, {
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(foreignRes.status).toBe(403);
+  });
+
+  it('rejects unknown class and unknown batch filters without leaking broader rosters or all students', async () => {
+    const owner = await register();
+    const institutionId = await createInstitution(owner.cookie);
+    const fixture = await createAcademicFixture(institutionId);
+    const assignedTeacher = await provisionTeacher(owner.cookie, institutionId, [
+      { classId: fixture.classA, batchId: fixture.batchA, subjectId: fixture.subjectId },
+    ]);
+
+    // 1. Owner queries an unknown class: rejected with 400 (not falling back to all students)
+    const unknownClassRes = await getAttendanceRegister(institutionId, owner.cookie, {
+      class: 'Completely Nonexistent Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(unknownClassRes.status).toBe(400);
+    const unknownClassBody = await unknownClassRes.json() as { error: string };
+    expect(unknownClassBody.error).toMatch(/class not found/i);
+
+    // 2. Owner queries an unknown batch: rejected with 400 (not falling back to whole class)
+    const unknownBatchRes = await getAttendanceRegister(institutionId, owner.cookie, {
+      class: 'Authorized Class',
+      batch: 'Completely Nonexistent Batch',
+      date: '2026-10-27',
+    });
+    expect(unknownBatchRes.status).toBe(400);
+    const unknownBatchBody = await unknownBatchRes.json() as { error: string };
+    expect(unknownBatchBody.error).toMatch(/batch not found/i);
+
+    // 3. Teacher queries unknown class: rejected with 403 (unauthorized)
+    const teacherUnknownClass = await getAttendanceRegister(institutionId, assignedTeacher.cookie, {
+      class: 'Completely Nonexistent Class',
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(teacherUnknownClass.status).toBe(403);
+
+    // 4. Missing class parameter is rejected with 400
+    const missingClass = await getAttendanceRegister(institutionId, owner.cookie, {
+      batch: 'Authorized Batch',
+      date: '2026-10-27',
+    });
+    expect(missingClass.status).toBe(400);
+  });
+
+  it('blocks cross-institution identifiers from accessing attendance data', async () => {
+    const ownerA = await register();
+    const instA = await createInstitution(ownerA.cookie);
+    const fixtureA = await createAcademicFixture(instA);
+
+    const ownerB = await register();
+    const instB = await createInstitution(ownerB.cookie);
+    const fixtureB = await createAcademicFixture(instB);
+
+    // Owner A querying Inst A with Class B ID from Inst B: rejected with 400 (class not in Inst A)
+    const crossClassRes = await getAttendanceRegister(instA, ownerA.cookie, {
+      class: fixtureB.classA,
+      batch: fixtureA.batchA,
+      date: '2026-10-27',
+    });
+    expect(crossClassRes.status).toBe(400);
+
+    // Owner A querying Inst B path: rejected with 403
+    const crossTenantPath = await getAttendanceRegister(instB, ownerA.cookie, {
+      class: fixtureB.classA,
+      batch: fixtureB.batchA,
+      date: '2026-10-27',
+    });
+    expect(crossTenantPath.status).toBe(403);
+  });
+
+  it('enforces attendance reports authorization: permits owner/admin, denies teacher/parent, and validates filters', async () => {
+    const owner = await register();
+    const institutionId = await createInstitution(owner.cookie);
+    const fixture = await createAcademicFixture(institutionId);
+    const admin = await provisionAdmin(owner.cookie, institutionId);
+    const teacher = await provisionTeacher(owner.cookie, institutionId, [
+      { classId: fixture.classA, batchId: fixture.batchA, subjectId: fixture.subjectId },
+    ]);
+    const parent = await provisionParent(owner.cookie, institutionId, [fixture.studentA]);
+
+    // Record attendance session for report metrics
+    await postAttendance(institutionId, owner.cookie, {
+      date: '2026-10-27',
+      class: 'Authorized Class',
+      batch: 'Authorized Batch',
+      records: [{ studentId: fixture.studentA, status: 'Present' }],
+    });
+
+    // 1. Owner can access reports
+    const ownerReports = await getAttendanceReports(institutionId, owner.cookie);
+    expect(ownerReports.status).toBe(200);
+    const ownerData = await ownerReports.json() as { overallAverage: number; todayAttendanceRate: number; batchPerformance: any[] };
+    expect(ownerData.overallAverage).toBe(100);
+    expect(ownerData.todayAttendanceRate).toBe(100);
+    expect(ownerData.batchPerformance.length).toBeGreaterThanOrEqual(1);
+
+    // 2. Admin can access reports
+    const adminReports = await getAttendanceReports(institutionId, admin.cookie);
+    expect(adminReports.status).toBe(200);
+
+    // 3. Teacher report access is explicitly denied with 403
+    const teacherReports = await getAttendanceReports(institutionId, teacher.cookie);
+    expect(teacherReports.status).toBe(403);
+
+    // 4. Parent report access is denied with 403
+    const parentReports = await getAttendanceReports(institutionId, parent.cookie);
+    expect(parentReports.status).toBe(403);
+
+    // 5. Unauthenticated report access is denied with 401
+    const anonReports = await getAttendanceReports(institutionId, null);
+    expect(anonReports.status).toBe(401);
+
+    // 6. Valid class filter scopes reports correctly
+    const filteredReports = await getAttendanceReports(institutionId, owner.cookie, { class: 'Authorized Class' });
+    expect(filteredReports.status).toBe(200);
+    const filteredData = await filteredReports.json() as { batchPerformance: any[] };
+    expect(filteredData.batchPerformance.every((b) => b.name.includes('Authorized Class'))).toBe(true);
+
+    // 7. Invalid class filter is rejected with 400 (never broadens)
+    const invalidClassReports = await getAttendanceReports(institutionId, owner.cookie, { class: 'Completely Nonexistent Class' });
+    expect(invalidClassReports.status).toBe(400);
+
+    // 8. Invalid batch filter is rejected with 400
+    const invalidBatchReports = await getAttendanceReports(institutionId, owner.cookie, { batch: 'Completely Nonexistent Batch' });
+    expect(invalidBatchReports.status).toBe(400);
+
+    // 9. Invalid academic year filter is rejected with 400
+    const invalidYearReports = await getAttendanceReports(institutionId, owner.cookie, { academic_year: 'Nonexistent AY' });
+    expect(invalidYearReports.status).toBe(400);
   });
 });

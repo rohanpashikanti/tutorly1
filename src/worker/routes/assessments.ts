@@ -6,6 +6,10 @@ import {
   extractIdempotencyKey,
   getIdempotentResponse,
   saveIdempotentResponse,
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  MAX_PAGE_NUMBER,
+  parsePageParameter,
 } from '../middleware';
 
 export const assessmentsRouter = new Hono<{ Bindings: Env }>();
@@ -19,22 +23,45 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
   const { DB } = c.env;
   const instId = auth.institutionId;
 
+  const page = parsePageParameter(c.req.query('page'), 1, MAX_PAGE_NUMBER);
+  const limit = parsePageParameter(c.req.query('limit'), DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+  if (page === null || limit === null) {
+    return c.json({ error: 'Invalid pagination parameters' }, 400);
+  }
+  const offset = (page - 1) * limit;
+
+  const countRow = await DB.prepare(
+    `SELECT COUNT(*) AS total FROM assessments WHERE institution_id = ? AND assessment_type = ?`
+  ).bind(instId, dbType).first<{ total: number }>();
+  const total = countRow?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
   const raw = await DB.prepare(
-    `SELECT a.id, a.name, a.assessment_type, a.subtype, a.starts_at, a.ends_at,
+    `WITH mark_stats AS (
+       SELECT assessment_id,
+              COUNT(marks) AS entered_count,
+              AVG(marks) AS avg_marks
+       FROM assessment_marks
+       WHERE institution_id = ? AND marks IS NOT NULL
+       GROUP BY assessment_id
+     )
+     SELECT a.id, a.name, a.assessment_type, a.subtype, a.starts_at, a.ends_at,
             a.duration_minutes, a.max_marks, a.status,
             c.name AS class_name, b.name AS batch_name, s.name AS subject_name,
             ay.name AS academic_year,
-            (SELECT COUNT(*) FROM assessment_marks am WHERE am.assessment_id = a.id AND am.marks IS NOT NULL) AS entered_count,
-            (SELECT AVG(am.marks) FROM assessment_marks am WHERE am.assessment_id = a.id AND am.marks IS NOT NULL) AS avg_marks
+            COALESCE(ms.entered_count, 0) AS entered_count,
+            ms.avg_marks
      FROM assessments a
      JOIN classes c ON c.id = a.class_id
      LEFT JOIN batches b ON b.id = a.batch_id
      JOIN subjects s ON s.id = a.subject_id
      JOIN academic_years ay ON ay.id = a.academic_year_id
+     LEFT JOIN mark_stats ms ON ms.assessment_id = a.id
      WHERE a.institution_id = ? AND a.assessment_type = ?
-     ORDER BY a.starts_at DESC`
+     ORDER BY a.starts_at DESC, a.created_at DESC, a.id DESC
+     LIMIT ? OFFSET ?`
   )
-    .bind(instId, dbType)
+    .bind(instId, instId, dbType, limit, offset)
     .all<{
       id: string;
       name: string;
@@ -76,7 +103,7 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
         academicYear: e.academic_year,
       };
     });
-    return c.json({ exams });
+    return c.json({ exams, total, totalPages, page, limit });
   } else {
     const tests = raw.results.map((t) => {
       let mappedType: 'Unit Test' | 'Practice Test' | 'Chapter Test' | 'Model Test' = 'Chapter Test';
@@ -106,9 +133,47 @@ assessmentsRouter.get('/:institutionId/assessments', async (c) => {
         averageScore: avgPercent,
       };
     });
-    return c.json({ tests });
+    return c.json({ tests, total, totalPages, page, limit });
   }
 });
+
+
+async function isTeacherAssignedToAssessmentCohort(
+  DB: D1Database,
+  instId: string,
+  membershipId: string,
+  academicYearId: string,
+  classId: string,
+  batchId: string | null,
+  subjectId: string,
+  dateStr: string
+): Promise<boolean> {
+  const assigned = await DB.prepare(
+    `SELECT 1 AS allowed
+     FROM teachers t
+     JOIN teacher_assignments ta ON ta.institution_id = t.institution_id AND ta.teacher_id = t.id
+     WHERE t.institution_id = ? AND t.membership_id = ? AND t.status = 'active'
+       AND ta.academic_year_id = ? AND ta.class_id = ?
+       AND (ta.batch_id IS NULL OR (? IS NOT NULL AND ta.batch_id = ?))
+       AND ta.subject_id = ?
+       AND ta.status = 'active'
+       AND (ta.starts_on <= ? OR ta.starts_on <= date('now'))
+       AND (ta.ends_on IS NULL OR ta.ends_on >= ? OR ta.ends_on >= date('now'))
+     LIMIT 1`
+  ).bind(
+    instId,
+    membershipId,
+    academicYearId,
+    classId,
+    batchId,
+    batchId,
+    subjectId,
+    dateStr,
+    dateStr
+  ).first<{ allowed: number }>();
+
+  return !!assigned;
+}
 
 assessmentsRouter.post('/:institutionId/assessments', async (c) => {
   const auth = await authenticateInstitution(c, ['owner', 'admin', 'teacher']);
@@ -120,7 +185,8 @@ assessmentsRouter.post('/:institutionId/assessments', async (c) => {
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   const typeParam = typeof body.type === 'string' && body.type.includes('school') ? 'school_exam' : 'tuition_test';
   const className = typeof body.class === 'string' ? body.class.trim() : 'Class 10';
-  const batchName = typeof body.batch === 'string' ? body.batch.trim() : 'Batch A';
+  const rawBatch = typeof body.batch === 'string' ? body.batch.trim() : body.batch === null ? null : undefined;
+  const batchName = rawBatch !== undefined ? rawBatch : (auth.membership.role === 'teacher' ? null : 'Batch A');
   const subjectName = typeof body.subject === 'string' ? body.subject.trim() : 'Mathematics';
   const maxMarks = Number(body.maxMarks ?? 100);
   const duration = Number(body.durationMinutes ?? 60);
@@ -158,45 +224,107 @@ assessmentsRouter.post('/:institutionId/assessments', async (c) => {
     );
   }
 
-  // Resolve academic year, class, batch, subject
-  let year = await DB.prepare(`SELECT id FROM academic_years WHERE institution_id = ? AND status = 'active'`)
-    .bind(instId).first<{ id: string }>();
-  if (!year) {
-    const yearId = `yr-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(
-      `INSERT INTO academic_years (id, institution_id, name, starts_on, ends_on, status)
-       VALUES (?, ?, 'Academic Year 2026 - 2027', '2026-04-01', '2027-03-31', 'active')`
-    ).bind(yearId, instId).run();
-    year = { id: yearId };
-  }
+  let yearId: string;
+  let classId: string;
+  let batchId: string | null = null;
+  let subjectId: string;
 
-  let classRec = await DB.prepare(`SELECT id FROM classes WHERE institution_id = ? AND name = ? AND deleted_at IS NULL`)
-    .bind(instId, className).first<{ id: string }>();
-  if (!classRec) {
-    const newClassId = `cls-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(`INSERT INTO classes (id, institution_id, name, code, status) VALUES (?, ?, ?, 'C', 'active')`)
-      .bind(newClassId, instId, className).run();
-    classRec = { id: newClassId };
-  }
+  if (auth.membership.role === 'teacher') {
+    const year = await DB.prepare(
+      `SELECT id FROM academic_years WHERE institution_id = ? AND status = 'active'`
+    ).bind(instId).first<{ id: string }>();
+    if (!year) {
+      return c.json({ error: 'No active academic year found' }, 403);
+    }
+    yearId = year.id;
 
-  let batchRec = await DB.prepare(`SELECT id FROM batches WHERE institution_id = ? AND class_id = ? AND name = ? AND status != 'archived'`)
-    .bind(instId, classRec.id, batchName).first<{ id: string }>();
-  if (!batchRec) {
-    const newBatchId = `bth-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(
-      `INSERT INTO batches (id, institution_id, class_id, name, starts_at, ends_at, meeting_days_json, status)
-       VALUES (?, ?, ?, ?, '04:30 PM', '06:30 PM', '["Mon","Tue","Wed","Thu","Fri"]', 'active')`
-    ).bind(newBatchId, instId, classRec.id, batchName).run();
-    batchRec = { id: newBatchId };
-  }
+    const classRec = await DB.prepare(
+      `SELECT id, name FROM classes WHERE institution_id = ? AND (id = ? OR name = ?) AND deleted_at IS NULL`
+    ).bind(instId, className, className).first<{ id: string; name: string }>();
+    if (!classRec) {
+      return c.json({ error: 'You are not authorized to create assessments for this class' }, 403);
+    }
+    classId = classRec.id;
 
-  let subjectRec = await DB.prepare(`SELECT id FROM subjects WHERE institution_id = ? AND name = ? AND status != 'archived'`)
-    .bind(instId, subjectName).first<{ id: string }>();
-  if (!subjectRec) {
-    const newSubId = `sub-${crypto.randomUUID().slice(0, 8)}`;
-    await DB.prepare(`INSERT INTO subjects (id, institution_id, name, code, is_core, color, status) VALUES (?, ?, ?, 'SUB', 1, '#6366F1', 'active')`)
-      .bind(newSubId, instId, subjectName).run();
-    subjectRec = { id: newSubId };
+    if (batchName) {
+      const batchRec = await DB.prepare(
+        `SELECT id, name FROM batches WHERE institution_id = ? AND class_id = ? AND (id = ? OR name = ?) AND status != 'archived'`
+      ).bind(instId, classId, batchName, batchName).first<{ id: string; name: string }>();
+      if (!batchRec) {
+        return c.json({ error: 'You are not authorized to create assessments for this batch' }, 403);
+      }
+      batchId = batchRec.id;
+    }
+
+    const subjectRec = await DB.prepare(
+      `SELECT id, name FROM subjects WHERE institution_id = ? AND (id = ? OR name = ?) AND status != 'archived'`
+    ).bind(instId, subjectName, subjectName).first<{ id: string; name: string }>();
+    if (!subjectRec) {
+      return c.json({ error: 'You are not authorized to create assessments for this subject' }, 403);
+    }
+    subjectId = subjectRec.id;
+
+    const assessmentDate = dateTime.slice(0, 10);
+    const assigned = await isTeacherAssignedToAssessmentCohort(
+      DB,
+      instId,
+      auth.membership.id,
+      yearId,
+      classId,
+      batchId,
+      subjectId,
+      assessmentDate
+    );
+    if (!assigned) {
+      return c.json({ error: 'You are not authorized to create assessments for this class, batch, or subject' }, 403);
+    }
+  } else {
+    // Resolve academic year, class, batch, subject for owner/admin
+    let year = await DB.prepare(`SELECT id FROM academic_years WHERE institution_id = ? AND status = 'active'`)
+      .bind(instId).first<{ id: string }>();
+    if (!year) {
+      const newYearId = `yr-${crypto.randomUUID().slice(0, 8)}`;
+      await DB.prepare(
+        `INSERT INTO academic_years (id, institution_id, name, starts_on, ends_on, status)
+         VALUES (?, ?, 'Academic Year 2026 - 2027', '2026-04-01', '2027-03-31', 'active')`
+      ).bind(newYearId, instId).run();
+      year = { id: newYearId };
+    }
+    yearId = year.id;
+
+    let classRec = await DB.prepare(`SELECT id FROM classes WHERE institution_id = ? AND (id = ? OR name = ?) AND deleted_at IS NULL`)
+      .bind(instId, className, className).first<{ id: string }>();
+    if (!classRec) {
+      const newClassId = `cls-${crypto.randomUUID().slice(0, 8)}`;
+      await DB.prepare(`INSERT INTO classes (id, institution_id, name, code, status) VALUES (?, ?, ?, 'C', 'active')`)
+        .bind(newClassId, instId, className).run();
+      classRec = { id: newClassId };
+    }
+    classId = classRec.id;
+
+    if (batchName) {
+      let batchRec = await DB.prepare(`SELECT id FROM batches WHERE institution_id = ? AND class_id = ? AND (id = ? OR name = ?) AND status != 'archived'`)
+        .bind(instId, classId, batchName, batchName).first<{ id: string }>();
+      if (!batchRec) {
+        const newBatchId = `bth-${crypto.randomUUID().slice(0, 8)}`;
+        await DB.prepare(
+          `INSERT INTO batches (id, institution_id, class_id, name, starts_at, ends_at, meeting_days_json, status)
+           VALUES (?, ?, ?, ?, '04:30 PM', '06:30 PM', '["Mon","Tue","Wed","Thu","Fri"]', 'active')`
+        ).bind(newBatchId, instId, classId, batchName).run();
+        batchRec = { id: newBatchId };
+      }
+      batchId = batchRec.id;
+    }
+
+    let subjectRec = await DB.prepare(`SELECT id FROM subjects WHERE institution_id = ? AND (id = ? OR name = ?) AND status != 'archived'`)
+      .bind(instId, subjectName, subjectName).first<{ id: string }>();
+    if (!subjectRec) {
+      const newSubId = `sub-${crypto.randomUUID().slice(0, 8)}`;
+      await DB.prepare(`INSERT INTO subjects (id, institution_id, name, code, is_core, color, status) VALUES (?, ?, ?, 'SUB', 1, '#6366F1', 'active')`)
+        .bind(newSubId, instId, subjectName).run();
+      subjectRec = { id: newSubId };
+    }
+    subjectId = subjectRec.id;
   }
 
   const assessmentId = `asm-${crypto.randomUUID().slice(0, 8)}`;
@@ -210,12 +338,12 @@ assessmentsRouter.post('/:institutionId/assessments', async (c) => {
       .bind(
         assessmentId,
         instId,
-        year.id,
+        yearId,
         typeParam,
         name,
-        subjectRec.id,
-        classRec.id,
-        batchRec.id,
+        subjectId,
+        classId,
+        batchId,
         dateTime,
         duration,
         maxMarks,
@@ -236,38 +364,66 @@ assessmentsRouter.post('/:institutionId/assessments', async (c) => {
 });
 
 assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const auth = await authenticateInstitution(c, ['owner', 'admin', 'teacher']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const assessmentId = c.req.param('assessmentId');
   const { DB } = c.env;
   const instId = auth.institutionId;
 
-  // 1. Get assessment details
+  // 1. Get assessment details strictly within the institution
   const asm = await DB.prepare(
-    `SELECT id, name, class_id, batch_id, max_marks, status
+    `SELECT id, name, academic_year_id, subject_id, class_id, batch_id, starts_at, max_marks, status
      FROM assessments
      WHERE id = ? AND institution_id = ?`
   )
     .bind(assessmentId, instId)
-    .first<{ id: string; name: string; class_id: string; batch_id: string | null; max_marks: number; status: string }>();
+    .first<{
+      id: string;
+      name: string;
+      academic_year_id: string;
+      subject_id: string;
+      class_id: string;
+      batch_id: string | null;
+      starts_at: string | null;
+      max_marks: number;
+      status: string;
+    }>();
 
   if (!asm) return c.json({ error: 'Assessment not found' }, 404);
 
-  // 2. Fetch enrolled students
+  // 2. If teacher, verify active assignment
+  if (auth.membership.role === 'teacher') {
+    const assessmentDate = asm.starts_at ? asm.starts_at.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const assigned = await isTeacherAssignedToAssessmentCohort(
+      DB,
+      instId,
+      auth.membership.id,
+      asm.academic_year_id,
+      asm.class_id,
+      asm.batch_id,
+      asm.subject_id,
+      assessmentDate
+    );
+    if (!assigned) {
+      return c.json({ error: 'You are not authorized to view marks for this assessment' }, 403);
+    }
+  }
+
+  // 3. Fetch enrolled students strictly scoped to institution, academic year, class, and (if set) batch
   let query = `
     SELECT s.id AS student_id, s.first_name, s.last_name, s.roll_no, s.avatar_url,
            e.id AS enrollment_id
     FROM students s
     JOIN enrollments e ON e.student_id = s.id AND e.institution_id = s.institution_id AND e.status = 'active'
-    WHERE s.institution_id = ? AND s.deleted_at IS NULL AND e.class_id = ?
+    WHERE s.institution_id = ? AND s.deleted_at IS NULL AND e.academic_year_id = ? AND e.class_id = ?
   `;
-  const params: unknown[] = [instId, asm.class_id];
+  const params: unknown[] = [instId, asm.academic_year_id, asm.class_id];
   if (asm.batch_id) {
     query += ` AND e.batch_id = ?`;
     params.push(asm.batch_id);
   }
-  query += ` ORDER BY s.roll_no, s.first_name`;
+  query += ` ORDER BY s.roll_no, s.first_name, s.id`;
 
   const enrolled = await DB.prepare(query).bind(...params).all<{
     student_id: string;
@@ -278,7 +434,7 @@ assessmentsRouter.get('/:institutionId/assessments/:assessmentId/marks', async (
     enrollment_id: string;
   }>();
 
-  // 3. Fetch existing marks
+  // 4. Fetch existing marks
   const marksRaw = await DB.prepare(
     `SELECT student_id, marks, remarks, status
      FROM assessment_marks
@@ -353,16 +509,36 @@ assessmentsRouter.post('/:institutionId/assessments/:assessmentId/marks', async 
   const instId = auth.institutionId;
 
   const asm = await DB.prepare(
-    `SELECT id, academic_year_id, class_id, batch_id, max_marks
+    `SELECT id, academic_year_id, subject_id, class_id, batch_id, starts_at, max_marks
      FROM assessments WHERE id = ? AND institution_id = ?`
   ).bind(assessmentId, instId).first<{
     id: string;
     academic_year_id: string;
+    subject_id: string;
     class_id: string;
     batch_id: string | null;
+    starts_at: string | null;
     max_marks: number;
   }>();
   if (!asm) return c.json({ error: 'Assessment not found' }, 404);
+
+  // If teacher, verify active assignment
+  if (auth.membership.role === 'teacher') {
+    const assessmentDate = asm.starts_at ? asm.starts_at.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const assigned = await isTeacherAssignedToAssessmentCohort(
+      DB,
+      instId,
+      auth.membership.id,
+      asm.academic_year_id,
+      asm.class_id,
+      asm.batch_id,
+      asm.subject_id,
+      assessmentDate
+    );
+    if (!assigned) {
+      return c.json({ error: 'You are not authorized to record marks for this assessment' }, 403);
+    }
+  }
 
   const normalizedMarks: Array<{
     studentId: string;

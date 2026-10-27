@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { Env, authenticateInstitution, readJson } from '../middleware';
+import { Env, authenticateInstitution, readJson, parsePageParameter } from '../middleware';
 
 export const calendarRouter = new Hono<{ Bindings: Env }>();
 
@@ -7,15 +7,21 @@ calendarRouter.get('/:institutionId/calendar/events', async (c) => {
   const auth = await authenticateInstitution(c);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
+  const limit = parsePageParameter(c.req.query('limit'), 100, 200);
+  if (limit === null) {
+    return c.json({ error: 'Invalid limit parameter' }, 400);
+  }
+
   const raw = await c.env.DB.prepare(
     `SELECT ce.id, ce.title, ce.event_type, ce.starts_at, ce.ends_at, ce.description,
             c.name AS class_name
      FROM calendar_events ce
      LEFT JOIN classes c ON c.id = ce.class_id
      WHERE ce.institution_id = ? AND ce.status != 'archived'
-     ORDER BY ce.starts_at ASC`
+     ORDER BY ce.starts_at ASC, ce.id ASC
+     LIMIT ?`
   )
-    .bind(auth.institutionId)
+    .bind(auth.institutionId, limit)
     .all<{
       id: string;
       title: string;

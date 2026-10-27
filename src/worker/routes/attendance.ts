@@ -23,51 +23,112 @@ export function chunkAttendanceStudentIds(ids: string[], chunkSize = ATTENDANCE_
 }
 
 attendanceRouter.get('/:institutionId/attendance/register', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const auth = await authenticateInstitution(c, ['owner', 'admin', 'teacher']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const { DB } = c.env;
   const instId = auth.institutionId;
 
   const dateStr = c.req.query('date') || new Date().toISOString().slice(0, 10);
-  const className = c.req.query('class') || 'Class 10';
-  const batchName = c.req.query('batch') || 'Batch A';
-
-  // 1. Resolve Class and Batch IDs
-  const classRec = await DB.prepare(
-    `SELECT id FROM classes WHERE institution_id = ? AND name = ? AND deleted_at IS NULL`
-  )
-    .bind(instId, className)
-    .first<{ id: string }>();
-
-  let batchRec: { id: string } | null = null;
-  if (classRec) {
-    batchRec = await DB.prepare(
-      `SELECT id FROM batches WHERE institution_id = ? AND class_id = ? AND name = ? AND status != 'archived'`
-    )
-      .bind(instId, classRec.id, batchName)
-      .first<{ id: string }>();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !Number.isFinite(Date.parse(`${dateStr}T00:00:00Z`))) {
+    return c.json({ error: 'Invalid date parameter' }, 400);
   }
 
-  // 2. Fetch enrolled students for this class/batch
+  const className = (c.req.query('class') || '').trim();
+  const batchName = (c.req.query('batch') || '').trim();
+
+  if (!className) {
+    return c.json({ error: 'Class parameter is required' }, 400);
+  }
+
+  // 1. Resolve Class
+  const classRec = await DB.prepare(
+    `SELECT id, name FROM classes WHERE institution_id = ? AND (id = ? OR name = ?) AND deleted_at IS NULL AND status = 'active'`
+  )
+    .bind(instId, className, className)
+    .first<{ id: string; name: string }>();
+
+  if (!classRec) {
+    if (auth.membership.role === 'teacher') {
+      return c.json({ error: 'You are not authorized to view attendance for this class or batch' }, 403);
+    }
+    return c.json({ error: 'Class not found' }, 400);
+  }
+
+  // 2. Resolve Batch (if provided)
+  let batchRec: { id: string; name: string } | null = null;
+  if (batchName) {
+    batchRec = await DB.prepare(
+      `SELECT id, name FROM batches WHERE institution_id = ? AND class_id = ? AND (id = ? OR name = ?) AND status != 'archived'`
+    )
+      .bind(instId, classRec.id, batchName, batchName)
+      .first<{ id: string; name: string }>();
+
+    if (!batchRec) {
+      if (auth.membership.role === 'teacher') {
+        return c.json({ error: 'You are not authorized to view attendance for this class or batch' }, 403);
+      }
+      return c.json({ error: 'Batch not found' }, 400);
+    }
+  }
+
+  // 3. Resolve Academic Year
+  const year = await DB.prepare(
+    `SELECT id, starts_on, ends_on FROM academic_years WHERE institution_id = ? AND status = 'active' AND starts_on <= ? AND ends_on >= ?`
+  ).bind(instId, dateStr, dateStr).first<{ id: string; starts_on: string; ends_on: string }>()
+    || await DB.prepare(
+      `SELECT id, starts_on, ends_on FROM academic_years WHERE institution_id = ? AND status = 'active' LIMIT 1`
+    ).bind(instId).first<{ id: string; starts_on: string; ends_on: string }>();
+
+  // 4. If teacher, verify teacher assignment
+  if (auth.membership.role === 'teacher') {
+    if (!year) {
+      return c.json({ error: 'You are not authorized to view attendance for this class or batch' }, 403);
+    }
+    const assigned = await DB.prepare(
+      `SELECT 1 AS allowed
+       FROM teachers t
+       JOIN teacher_assignments ta ON ta.institution_id = t.institution_id AND ta.teacher_id = t.id
+       WHERE t.institution_id = ? AND t.membership_id = ? AND t.status = 'active'
+         AND ta.academic_year_id = ? AND ta.class_id = ?
+         AND (ta.batch_id IS NULL OR ? IS NULL OR ta.batch_id = ?)
+         AND ta.status = 'active' AND ta.starts_on <= ? AND (ta.ends_on IS NULL OR ta.ends_on >= ?)
+       LIMIT 1`
+    ).bind(
+      instId,
+      auth.membership.id,
+      year.id,
+      classRec.id,
+      batchRec ? batchRec.id : null,
+      batchRec ? batchRec.id : null,
+      dateStr,
+      dateStr
+    ).first<{ allowed: number }>();
+
+    if (!assigned) {
+      return c.json({ error: 'You are not authorized to view attendance for this class or batch' }, 403);
+    }
+  }
+
+  // 5. Fetch enrolled students strictly scoped to classRec and (if present) batchRec
   let enrolledQuery = `
     SELECT s.id AS student_id, s.first_name, s.last_name, s.roll_no, s.avatar_url,
            e.id AS enrollment_id
     FROM students s
     JOIN enrollments e ON e.student_id = s.id AND e.institution_id = s.institution_id AND e.status = 'active'
-    WHERE s.institution_id = ? AND s.deleted_at IS NULL
+    WHERE s.institution_id = ? AND s.deleted_at IS NULL AND e.class_id = ?
   `;
-  const params: unknown[] = [instId];
+  const params: unknown[] = [instId, classRec.id];
 
-  if (classRec) {
-    enrolledQuery += ` AND e.class_id = ?`;
-    params.push(classRec.id);
-  }
   if (batchRec) {
     enrolledQuery += ` AND e.batch_id = ?`;
     params.push(batchRec.id);
   }
-  enrolledQuery += ` ORDER BY s.roll_no, s.first_name`;
+  if (year) {
+    enrolledQuery += ` AND e.academic_year_id = ?`;
+    params.push(year.id);
+  }
+  enrolledQuery += ` ORDER BY s.roll_no, s.first_name, s.id`;
 
   const enrolled = await DB.prepare(enrolledQuery).bind(...params).all<{
     student_id: string;
@@ -78,19 +139,17 @@ attendanceRouter.get('/:institutionId/attendance/register', async (c) => {
     enrollment_id: string;
   }>();
 
-  // 3. Find if session exists for this date and class/batch
+  // 6. Find session if exists for this date, class, and batch
   let sessionQuery = `
     SELECT id, status FROM attendance_sessions
-    WHERE institution_id = ? AND session_date = ?
+    WHERE institution_id = ? AND session_date = ? AND class_id = ?
   `;
-  const sessionParams: unknown[] = [instId, dateStr];
-  if (classRec) {
-    sessionQuery += ` AND class_id = ?`;
-    sessionParams.push(classRec.id);
-  }
+  const sessionParams: unknown[] = [instId, dateStr, classRec.id];
   if (batchRec) {
     sessionQuery += ` AND batch_id = ?`;
     sessionParams.push(batchRec.id);
+  } else {
+    sessionQuery += ` AND batch_id IS NULL`;
   }
 
   const existingSession = await DB.prepare(sessionQuery).bind(...sessionParams).first<{
@@ -98,7 +157,7 @@ attendanceRouter.get('/:institutionId/attendance/register', async (c) => {
     status: string;
   }>();
 
-  // 4. If session exists, fetch marked records
+  // 7. Marked records
   const marksMap = new Map<string, { status: string; remarks: string }>();
   if (existingSession) {
     const marksRaw = await DB.prepare(
@@ -278,35 +337,107 @@ attendanceRouter.post('/:institutionId/attendance/submit', async (c) => {
 });
 
 attendanceRouter.get('/:institutionId/attendance/reports', async (c) => {
-  const auth = await authenticateInstitution(c);
+  const auth = await authenticateInstitution(c, ['owner', 'admin']);
   if ('error' in auth) return c.json({ error: auth.error }, auth.status);
 
   const { DB } = c.env;
   const instId = auth.institutionId;
 
-  // Batch-wise and student-wise attendance metrics
-  const batchStatsRaw = await DB.prepare(
-    `SELECT b.name AS batch_name, c.name AS class_name,
-            COUNT(ar.id) AS total_records,
-            SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
-     FROM batches b
-     JOIN classes c ON c.id = b.class_id
-     LEFT JOIN attendance_sessions s ON s.batch_id = b.id AND s.institution_id = b.institution_id
-     LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.institution_id = b.institution_id
-     WHERE b.institution_id = ? AND b.status != 'archived'
-     GROUP BY b.id, b.name, c.name`
-  )
-    .bind(instId)
+  // Validate optional filter parameters if supplied
+  const className = (c.req.query('class') || '').trim();
+  const batchName = (c.req.query('batch') || '').trim();
+  const academicYearParam = (c.req.query('academic_year') || c.req.query('academicYearId') || '').trim();
+
+  let classRec: { id: string } | null = null;
+  if (className && className !== 'All Classes' && className !== 'All') {
+    classRec = await DB.prepare(
+      `SELECT id FROM classes WHERE institution_id = ? AND (id = ? OR name = ?) AND deleted_at IS NULL AND status = 'active'`
+    )
+      .bind(instId, className, className)
+      .first<{ id: string }>();
+    if (!classRec) {
+      return c.json({ error: 'Invalid or unknown class filter' }, 400);
+    }
+  }
+
+  let batchRec: { id: string } | null = null;
+  if (batchName && batchName !== 'All Batches' && batchName !== 'All') {
+    const batchQuery = classRec
+      ? `SELECT id FROM batches WHERE institution_id = ? AND class_id = ? AND (id = ? OR name = ?) AND status != 'archived'`
+      : `SELECT id FROM batches WHERE institution_id = ? AND (id = ? OR name = ?) AND status != 'archived'`;
+    const batchParams = classRec ? [instId, classRec.id, batchName, batchName] : [instId, batchName, batchName];
+    batchRec = await DB.prepare(batchQuery).bind(...batchParams).first<{ id: string }>();
+    if (!batchRec) {
+      return c.json({ error: 'Invalid or unknown batch filter' }, 400);
+    }
+  }
+
+  let yearRec: { id: string } | null = null;
+  if (academicYearParam && academicYearParam !== 'All') {
+    yearRec = await DB.prepare(
+      `SELECT id FROM academic_years WHERE institution_id = ? AND (id = ? OR name = ?) AND status != 'archived'`
+    )
+      .bind(instId, academicYearParam, academicYearParam)
+      .first<{ id: string }>();
+    if (!yearRec) {
+      return c.json({ error: 'Invalid or unknown academic year filter' }, 400);
+    }
+  }
+
+  // Batch-wise attendance metrics scoped to institution and optional filters
+  let batchQuery = `
+    SELECT b.name AS batch_name, c.name AS class_name,
+           COUNT(ar.id) AS total_records,
+           SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
+    FROM batches b
+    JOIN classes c ON c.id = b.class_id AND c.deleted_at IS NULL
+    LEFT JOIN attendance_sessions s ON s.batch_id = b.id AND s.institution_id = b.institution_id
+    LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.institution_id = b.institution_id
+    WHERE b.institution_id = ? AND b.status != 'archived'
+  `;
+  const batchBindings: unknown[] = [instId];
+  if (classRec) {
+    batchQuery += ` AND c.id = ?`;
+    batchBindings.push(classRec.id);
+  }
+  if (batchRec) {
+    batchQuery += ` AND b.id = ?`;
+    batchBindings.push(batchRec.id);
+  }
+  if (yearRec) {
+    batchQuery += ` AND (s.academic_year_id IS NULL OR s.academic_year_id = ?)`;
+    batchBindings.push(yearRec.id);
+  }
+  batchQuery += ` GROUP BY b.id, b.name, c.name ORDER BY c.name, b.name`;
+
+  const batchStatsRaw = await DB.prepare(batchQuery)
+    .bind(...batchBindings)
     .all<{ batch_name: string; class_name: string; total_records: number; present_count: number }>();
 
-  // Total institution-wide attendance rate
-  const overallSummary = await DB.prepare(
-    `SELECT COUNT(ar.id) AS total_records,
-            SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
-     FROM attendance_records ar
-     WHERE ar.institution_id = ?`
-  )
-    .bind(instId)
+  // Overall attendance metrics scoped to institution and optional filters
+  let overallQuery = `
+    SELECT COUNT(ar.id) AS total_records,
+           SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
+    FROM attendance_records ar
+    JOIN attendance_sessions s ON s.id = ar.session_id AND s.institution_id = ar.institution_id
+    WHERE ar.institution_id = ?
+  `;
+  const overallBindings: unknown[] = [instId];
+  if (classRec) {
+    overallQuery += ` AND s.class_id = ?`;
+    overallBindings.push(classRec.id);
+  }
+  if (batchRec) {
+    overallQuery += ` AND s.batch_id = ?`;
+    overallBindings.push(batchRec.id);
+  }
+  if (yearRec) {
+    overallQuery += ` AND s.academic_year_id = ?`;
+    overallBindings.push(yearRec.id);
+  }
+
+  const overallSummary = await DB.prepare(overallQuery)
+    .bind(...overallBindings)
     .first<{ total_records: number; present_count: number }>();
 
   const overallAvg = overallSummary && overallSummary.total_records > 0
@@ -314,14 +445,29 @@ attendanceRouter.get('/:institutionId/attendance/reports', async (c) => {
     : 0;
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const todaySummary = await DB.prepare(
-    `SELECT COUNT(ar.id) AS total_records,
-            SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
-     FROM attendance_sessions s
-     JOIN attendance_records ar ON ar.session_id = s.id AND ar.institution_id = s.institution_id
-     WHERE s.institution_id = ? AND s.session_date = ?`
-  )
-    .bind(instId, todayStr)
+  let todayQuery = `
+    SELECT COUNT(ar.id) AS total_records,
+           SUM(CASE WHEN ar.status IN ('present', 'late') THEN 1 ELSE 0 END) AS present_count
+    FROM attendance_sessions s
+    JOIN attendance_records ar ON ar.session_id = s.id AND ar.institution_id = s.institution_id
+    WHERE s.institution_id = ? AND s.session_date = ?
+  `;
+  const todayBindings: unknown[] = [instId, todayStr];
+  if (classRec) {
+    todayQuery += ` AND s.class_id = ?`;
+    todayBindings.push(classRec.id);
+  }
+  if (batchRec) {
+    todayQuery += ` AND s.batch_id = ?`;
+    todayBindings.push(batchRec.id);
+  }
+  if (yearRec) {
+    todayQuery += ` AND s.academic_year_id = ?`;
+    todayBindings.push(yearRec.id);
+  }
+
+  const todaySummary = await DB.prepare(todayQuery)
+    .bind(...todayBindings)
     .first<{ total_records: number; present_count: number }>();
 
   const todayRate = todaySummary && todaySummary.total_records > 0

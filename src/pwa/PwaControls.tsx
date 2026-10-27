@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { getInstallationMessage, isStandaloneMode } from './pwaState';
+import {
+  getUpdateSafety,
+  subscribeUpdateSafety,
+  setUpdateDeferred,
+  isDeferredUpdatePending,
+  setReloadRequested,
+  UpdateSafetyStatus,
+} from './updateSafety';
 import './pwa.css';
 
 interface InstallPromptEvent extends Event {
@@ -13,8 +21,43 @@ export function PwaControls() {
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
   const [updateReady, setUpdateReady] = useState(false);
+  const [safetyStatus, setSafetyStatus] = useState<UpdateSafetyStatus>(() => getUpdateSafety());
+  const [isDeferred, setIsDeferred] = useState(() => isDeferredUpdatePending());
   const [installationMessage, setInstallationMessage] = useState('');
   const reloadAfterUpdate = useRef(false);
+  const reloadExecuted = useRef(false);
+  const activationSent = useRef(false);
+
+  // Subscribe to update safety changes (dirty forms and active mutations)
+  useEffect(() => {
+    const unsubscribe = subscribeUpdateSafety(() => {
+      const current = getUpdateSafety();
+      setSafetyStatus(current);
+      const pendingDeferred = isDeferredUpdatePending();
+      setIsDeferred(pendingDeferred);
+
+      // If user requested an update and it was deferred, automatically proceed when work is safe
+      if (pendingDeferred && current.isSafe) {
+        setUpdateDeferred(false);
+        setIsDeferred(false);
+
+        if (activationSent.current) {
+          // Worker was already told to activate, proceed with reload
+          if (!reloadExecuted.current) {
+            reloadExecuted.current = true;
+            window.location.reload();
+          }
+        } else if (registration?.waiting) {
+          activationSent.current = true;
+          reloadAfterUpdate.current = true;
+          setReloadRequested(true);
+          registration.waiting.postMessage({ type: 'TUTORLY_ACTIVATE_UPDATE' });
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [registration]);
 
   useEffect(() => {
     const displayMode = window.matchMedia('(display-mode: standalone)');
@@ -45,8 +88,19 @@ export function PwaControls() {
     if (import.meta.env.PROD && window.isSecureContext && 'serviceWorker' in navigator) {
       let active = true;
       const handleControllerChange = () => {
-        if (reloadAfterUpdate.current) window.location.reload();
+        if (reloadAfterUpdate.current && !reloadExecuted.current) {
+          const current = getUpdateSafety();
+          if (current.isSafe) {
+            reloadExecuted.current = true;
+            window.location.reload();
+          } else {
+            // Unsafe work was started before controller changed; defer reload
+            setUpdateDeferred(true);
+            setIsDeferred(true);
+          }
+        }
       };
+
       navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
       void navigator.serviceWorker.register('/sw.js', { scope: '/' })
         .then((nextRegistration) => {
@@ -98,8 +152,24 @@ export function PwaControls() {
 
   const activateUpdate = () => {
     if (!registration?.waiting) return;
-    reloadAfterUpdate.current = true;
-    registration.waiting.postMessage({ type: 'TUTORLY_ACTIVATE_UPDATE' });
+    const current = getUpdateSafety();
+    if (!current.isSafe) {
+      setUpdateDeferred(true);
+      setIsDeferred(true);
+      return;
+    }
+
+    if (!activationSent.current) {
+      activationSent.current = true;
+      reloadAfterUpdate.current = true;
+      setReloadRequested(true);
+      registration.waiting.postMessage({ type: 'TUTORLY_ACTIVATE_UPDATE' });
+    }
+  };
+
+  const cancelDeferredUpdate = () => {
+    setUpdateDeferred(false);
+    setIsDeferred(false);
   };
 
   const showInstallHelp = !isInstalled;
@@ -112,20 +182,55 @@ export function PwaControls() {
           <strong>You're offline.</strong> A connection is required for current school data, attendance, and payments.
         </div>
       )}
+
       {updateReady && (
-        <div className="pwa-notice" role="status">
-          <span>A Tutorly update is ready.</span>
-          <button type="button" className="pwa-button" onClick={activateUpdate}>Reload to update</button>
-        </div>
+        isDeferred ? (
+          <div className="pwa-notice pwa-notice-deferred" role="status" aria-live="polite">
+            <div className="pwa-notice-content">
+              <strong>Update deferred</strong>
+              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#475569' }}>
+                {safetyStatus.blockingReasons.length > 0
+                  ? `Unsaved work: ${safetyStatus.blockingReasons.join(', ')}. The update will apply automatically once changes are saved or discarded.`
+                  : 'An operation is in progress. The update will apply automatically once finished.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="pwa-button pwa-button-secondary"
+              onClick={cancelDeferredUpdate}
+              aria-label="Cancel deferred update"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="pwa-notice" role="status" aria-live="polite">
+            <div className="pwa-notice-content">
+              <span>A Tutorly update is ready.</span>
+            </div>
+            <button type="button" className="pwa-button" onClick={activateUpdate}>
+              Reload to update
+            </button>
+          </div>
+        )
       )}
+
       {(showInstallHelp || installationMessage) && (
         <div className="pwa-install-help">
           {showInstallHelp && (
             <>
-              {installPrompt && <button type="button" className="pwa-button" onClick={() => void installTutorly()}>Install Tutorly</button>}
+              {installPrompt && (
+                <button type="button" className="pwa-button" onClick={() => void installTutorly()}>
+                  Install Tutorly
+                </button>
+              )}
               <details>
                 <summary>{installPrompt ? 'Installation help' : 'Install Tutorly'}</summary>
-                <p>In Chrome on Android, use the browser menu and choose “Install app” or “Add to Home screen” when available. On iPhone or iPad, use Safari’s Share menu and choose “Add to Home Screen.” Other browsers may use different options or may not support installation.</p>
+                <p>
+                  In Chrome on Android, use the browser menu and choose “Install app” or “Add to Home screen” when available.
+                  On iPhone or iPad, use Safari’s Share menu and choose “Add to Home Screen.” Other browsers may use different
+                  options or may not support installation.
+                </p>
               </details>
             </>
           )}

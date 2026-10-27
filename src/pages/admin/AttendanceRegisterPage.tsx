@@ -23,6 +23,7 @@ import {
 } from '../../utils/attendanceSubmission';
 
 import { ClassItem, BatchItem } from '../../types';
+import { useTrackDirtyForm } from '../../pwa/updateSafety';
 
 export type AttendanceStatus = 'P' | 'A' | 'L' | null;
 
@@ -155,6 +156,9 @@ export const AttendanceRegisterPage: React.FC = () => {
   const currentCohort = students.filter(
     (s) => s.className === selectedClass && s.batch === selectedBatch
   );
+
+  const isAttendanceDirty = (!isSaved && currentCohort.length > 0 && currentCohort.some((s) => s.status !== null)) || isSaving;
+  useTrackDirtyForm('attendance-register', isAttendanceDirty, 'Attendance register');
 
   // Status counts (Exactly 3 selectable statuses: Present, Absent, Late)
   const presentCount = currentCohort.filter((s) => s.status === 'P').length;

@@ -19,12 +19,21 @@ import {
   saveStoredStudentFees
 } from '../../utils/storage';
 import { runConfirmedFeePayment } from '../../utils/feePaymentSubmission';
+import { useTrackDirtyForm } from '../../pwa/updateSafety';
 
 export const StudentFeesPage: React.FC = () => {
   const { showToast, activeInstitutionId } = useApp();
   
   // Persistent Fee records state
   const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(() => getStoredStudentFees());
+  const [feeSummary, setFeeSummary] = useState<{
+    totalAssigned: number;
+    totalCollected: number;
+    totalOutstanding: number;
+    fullyPaidCount: number;
+    unpaidCount: number;
+    partialCount: number;
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid' | 'Partial'>('All');
   const [classFilter, setClassFilter] = useState('All Classes');
@@ -37,13 +46,20 @@ export const StudentFeesPage: React.FC = () => {
     amount: '',
     paymentMethod: 'UPI' as 'UPI' | 'Cash' | 'Card' | 'Bank Transfer',
     paymentDate: new Date().toISOString().split('T')[0],
-    receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`,
+    externalReference: '',
     remarks: 'Tuition installment received'
   });
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState<string | null>(null);
   const isSubmittingRef = useRef(false);
+
+  const isPaymentDirty = Boolean(activePaymentRecord) && (
+    paymentForm.amount !== '' ||
+    paymentForm.externalReference.trim() !== '' ||
+    isSubmitting
+  );
+  useTrackDirtyForm('fee-payment', isPaymentDirty, 'Fee payment submission');
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -59,6 +75,9 @@ export const StudentFeesPage: React.FC = () => {
       const list = res.records || [];
       setFeeRecords(list);
       saveStoredStudentFees(list);
+      if (res.summary) {
+        setFeeSummary(res.summary);
+      }
       setClassesList(over?.classes || []);
     } catch (err) {
       console.error('Failed to load student fees:', err);
@@ -93,13 +112,14 @@ export const StudentFeesPage: React.FC = () => {
     return matchesSearch && matchesStatus && matchesClass;
   });
 
-  // Summary statistics
-  const totalAssigned = feeRecords.reduce((acc, r) => acc + r.totalFees, 0);
-  const totalCollected = feeRecords.reduce((acc, r) => acc + r.paidAmount, 0);
-  const totalOutstanding = totalAssigned - totalCollected;
-  const fullyPaidCount = feeRecords.filter(r => (r.totalFees - r.paidAmount) === 0).length;
-  const unpaidCount = feeRecords.filter(r => r.paidAmount === 0).length;
-  const partialCount = feeRecords.filter(r => r.paidAmount > 0 && (r.totalFees - r.paidAmount) > 0).length;
+  // Summary statistics (prefer server-computed tenant aggregates when available)
+  const totalAssigned = feeSummary?.totalAssigned ?? feeRecords.reduce((acc, r) => acc + r.totalFees, 0);
+  const totalCollected = feeSummary?.totalCollected ?? feeRecords.reduce((acc, r) => acc + r.paidAmount, 0);
+  const totalOutstanding = feeSummary?.totalOutstanding ?? (totalAssigned - totalCollected);
+  const fullyPaidCount = feeSummary?.fullyPaidCount ?? feeRecords.filter(r => (r.totalFees - r.paidAmount) === 0).length;
+  const unpaidCount = feeSummary?.unpaidCount ?? feeRecords.filter(r => r.paidAmount === 0).length;
+  const partialCount = feeSummary?.partialCount ?? feeRecords.filter(r => r.paidAmount > 0 && (r.totalFees - r.paidAmount) > 0).length;
+
 
   const openPaymentModal = (rec: FeeRecord) => {
     setPaymentIdempotencyKey(crypto.randomUUID());
@@ -110,7 +130,7 @@ export const StudentFeesPage: React.FC = () => {
       amount: remaining > 0 ? String(remaining) : '0',
       paymentMethod: 'UPI',
       paymentDate: new Date().toISOString().split('T')[0],
-      receiptNo: `REC-${Math.floor(100000 + Math.random() * 900000)}`,
+      externalReference: '',
       remarks: 'Fee payment received'
     });
   };
@@ -132,6 +152,17 @@ export const StudentFeesPage: React.FC = () => {
       return;
     }
 
+    const today = new Date().toISOString().split('T')[0];
+    if (paymentForm.paymentDate && paymentForm.paymentDate > today) {
+      setPaymentError('Payment date cannot be in the future.');
+      return;
+    }
+
+    if (paymentForm.externalReference && paymentForm.externalReference.trim().length > 100) {
+      setPaymentError('External reference must be 100 characters or fewer.');
+      return;
+    }
+
     if (isSubmittingRef.current) return;
     if (!paymentIdempotencyKey || !activeInstitutionId) {
       setPaymentError('A payment request could not be started. Close this form and open it again to retry.');
@@ -148,6 +179,8 @@ export const StudentFeesPage: React.FC = () => {
           amount: payAmount,
           method: paymentForm.paymentMethod,
           notes: paymentForm.remarks,
+          paymentDate: paymentForm.paymentDate,
+          externalReference: paymentForm.externalReference.trim() || undefined,
           idempotencyKey: paymentIdempotencyKey,
         }),
         (response) => response.success === true && Boolean(response.paymentId && response.receiptNo),
@@ -631,6 +664,7 @@ export const StudentFeesPage: React.FC = () => {
                     <input
                       type="date"
                       required
+                      max={new Date().toISOString().split('T')[0]}
                       value={paymentForm.paymentDate}
                       disabled={isSubmitting}
                       onChange={(e) => setPaymentForm({ ...paymentForm, paymentDate: e.target.value })}
@@ -641,15 +675,19 @@ export const StudentFeesPage: React.FC = () => {
 
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
-                    Receipt Number / Reference
+                    External Reference (Optional)
                   </label>
                   <input
                     type="text"
-                    value={paymentForm.receiptNo}
+                    placeholder="e.g. UPI Ref / UTR / Cheque No"
+                    value={paymentForm.externalReference}
                     disabled={isSubmitting}
-                    onChange={(e) => setPaymentForm({ ...paymentForm, receiptNo: e.target.value })}
+                    onChange={(e) => setPaymentForm({ ...paymentForm, externalReference: e.target.value })}
                     style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   />
+                  <div style={{ fontSize: '11px', color: '#64748B', marginTop: '4px' }}>
+                    Official receipt number will be automatically generated by the system upon confirmation.
+                  </div>
                 </div>
               </div>
 
